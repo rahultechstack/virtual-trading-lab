@@ -1,7 +1,11 @@
 # ---------------------------------------------------------------------------
-# Stage 1 infrastructure: PostgreSQL only.
-# Redis is intentionally NOT included; it is added in a later stage when a
-# concrete need exists (pub/sub fan-out or market-data caching).
+# Stage 1 stack: PostgreSQL + FastAPI + React dev server.
+#
+# Redis is intentionally absent; it is added in a later stage when a concrete
+# need exists (pub/sub fan-out or market-data caching).
+#
+#   docker compose up -d --build      start everything
+#   docker compose up -d postgres     database only (run app code on the host)
 # ---------------------------------------------------------------------------
 services:
   postgres:
@@ -25,6 +29,66 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+
+  backend:
+    build:
+      context: ./backend
+      target: dev
+    container_name: vtrader-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      # Inside the network the database is reached by service name, not
+      # localhost. Real env vars outrank values in backend/.env.
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-vtrader}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vtrader_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-virtual_trading}
+    ports:
+      - "${BACKEND_HOST_PORT:-8000}:8000"
+    volumes:
+      # Source bind-mount drives uvicorn --reload.
+      - ./backend/app:/app/app
+      - ./backend/alembic:/app/alembic
+      - ./backend/alembic.ini:/app/alembic.ini
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ping').read()"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+    container_name: vtrader-frontend
+    restart: unless-stopped
+    environment:
+      # The bundle runs in the host browser, so it must call the host-published
+      # backend port — not the internal service name.
+      VITE_API_BASE_URL: http://localhost:${BACKEND_HOST_PORT:-8000}
+      VITE_API_V1_PREFIX: /api/v1
+      CHOKIDAR_USEPOLLING: "true"
+    ports:
+      - "${FRONTEND_HOST_PORT:-5173}:5173"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/index.html:/app/index.html
+      - ./frontend/vite.config.ts:/app/vite.config.ts
+      - ./frontend/tsconfig.json:/app/tsconfig.json
+      - ./frontend/tsconfig.node.json:/app/tsconfig.node.json
+    depends_on:
+      - backend
 
 volumes:
   postgres_data:
