@@ -76,10 +76,19 @@ def prepared_database() -> None:
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def clean_wallet() -> None:
-    """Give every test an empty wallet table."""
+async def clean_tables() -> None:
+    """Give every test empty tables.
+
+    RESTART IDENTITY resets the order and trade sequences so ids are
+    predictable per test; CASCADE handles the trades -> orders foreign key.
+    """
     async with SessionLocal() as session:
-        await session.execute(text("TRUNCATE TABLE wallet"))
+        await session.execute(
+            text(
+                "TRUNCATE TABLE trades, orders, positions, wallet "
+                "RESTART IDENTITY CASCADE"
+            )
+        )
         await session.commit()
     yield
 

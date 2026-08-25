@@ -5,6 +5,18 @@ before Alembic autogenerate inspects it.
 """
 
 from app.db.base import Base
+from app.models.enums import OrderSide, OrderStatus, OrderType
+from app.models.trading import Order, Position, Trade
 from app.models.wallet import WALLET_ID, Wallet
 
-__all__ = ["Base", "Wallet", "WALLET_ID"]
+__all__ = [
+    "Base",
+    "Order",
+    "OrderSide",
+    "OrderStatus",
+    "OrderType",
+    "Position",
+    "Trade",
+    "WALLET_ID",
+    "Wallet",
+]

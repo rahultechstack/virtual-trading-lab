@@ -9,7 +9,7 @@ from decimal import Decimal
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import Field, computed_field, field_validator
+from pydantic import Field, SecretStr, computed_field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -59,6 +59,17 @@ class Settings(BaseSettings):
     # The platform is deliberately single-instrument and single-wallet.
     TRADING_SYMBOL: str = "RELIANCE"
     TRADING_EXCHANGE: str = "NSE"
+
+    # --- Market data -----------------------------------------------------
+    # Which provider implementation to load. See app/market_data/registry.py.
+    MARKET_DATA_PROVIDER: str = "yahoo"
+    MARKET_DATA_TIMEOUT_SECONDS: float = 15.0
+
+    # Credentials for providers that need them. SecretStr keeps the value out
+    # of logs, tracebacks and repr output. NEVER hard-code a key here - set it
+    # in .env, which is gitignored.
+    MARKET_DATA_API_KEY: SecretStr | None = None
+    MARKET_DATA_API_SECRET: SecretStr | None = None
 
     # --- Wallet ----------------------------------------------------------
     # Opening capital granted when the wallet is first initialised.

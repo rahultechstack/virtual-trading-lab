@@ -2,8 +2,10 @@
 
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import health, wallet
+from app.api.v1.endpoints import health, market_data, trading, wallet
 
 api_router = APIRouter()
 api_router.include_router(health.router)
 api_router.include_router(wallet.router)
+api_router.include_router(market_data.router)
+api_router.include_router(trading.router)

@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.core.exceptions import DomainError
 from app.core.logging import configure_logging, get_logger
 from app.db.session import dispose_engine
+from app.market_data.registry import close_provider
 
 logger = get_logger(__name__)
 
@@ -30,7 +31,8 @@ async def lifespan(_: FastAPI):
         settings.TRADING_SYMBOL,
     )
     yield
-    logger.info("Shutting down — disposing database connection pool.")
+    logger.info("Shutting down.")
+    await close_provider()
     await dispose_engine()
 
 
@@ -72,6 +74,8 @@ def create_app() -> FastAPI:
             "docs": "/docs",
             "health": f"{settings.API_V1_PREFIX}/health",
             "wallet": f"{settings.API_V1_PREFIX}/wallet",
+            "market_data": f"{settings.API_V1_PREFIX}/market-data",
+            "trading": f"{settings.API_V1_PREFIX}/trading",
         }
 
     return app
