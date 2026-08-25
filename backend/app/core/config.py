@@ -5,6 +5,7 @@ reads ``os.environ`` directly.
 """
 
 import json
+from decimal import Decimal
 from functools import lru_cache
 from typing import Annotated, Literal
 
@@ -42,6 +43,10 @@ class Settings(BaseSettings):
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 10
     DB_POOL_PRE_PING: bool = True
+    # Disable connection pooling entirely. Required under pytest, where each
+    # test may run in its own event loop and a pooled asyncpg connection
+    # created in a previous loop cannot be reused.
+    DB_USE_NULL_POOL: bool = False
 
     # --- CORS -----------------------------------------------------------
     # NoDecode: pydantic-settings would otherwise JSON-decode this field before
@@ -54,6 +59,12 @@ class Settings(BaseSettings):
     # The platform is deliberately single-instrument and single-wallet.
     TRADING_SYMBOL: str = "RELIANCE"
     TRADING_EXCHANGE: str = "NSE"
+
+    # --- Wallet ----------------------------------------------------------
+    # Opening capital granted when the wallet is first initialised.
+    # Decimal (never float) because this is money.
+    WALLET_INITIAL_BALANCE: Decimal = Decimal("1000000.00")
+    WALLET_CURRENCY: str = "INR"
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

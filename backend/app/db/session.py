@@ -2,22 +2,35 @@
 
 from collections.abc import AsyncGenerator
 
+from typing import Any
+
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
+
+
+def _engine_options() -> dict[str, Any]:
+    """Pool configuration is mutually exclusive with NullPool."""
+    if settings.DB_USE_NULL_POOL:
+        return {"poolclass": NullPool}
+    return {
+        "pool_size": settings.DB_POOL_SIZE,
+        "max_overflow": settings.DB_MAX_OVERFLOW,
+        "pool_pre_ping": settings.DB_POOL_PRE_PING,
+    }
+
 
 engine: AsyncEngine = create_async_engine(
     settings.DATABASE_URL,
     echo=settings.DB_ECHO,
-    pool_size=settings.DB_POOL_SIZE,
-    max_overflow=settings.DB_MAX_OVERFLOW,
-    pool_pre_ping=settings.DB_POOL_PRE_PING,
     future=True,
+    **_engine_options(),
 )
 
 SessionLocal: async_sessionmaker[AsyncSession] = async_sessionmaker(

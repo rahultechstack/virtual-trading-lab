@@ -4,5 +4,18 @@ from app.schemas.health import (
     PingResponse,
     ServiceStatus,
 )
+from app.schemas.wallet import (
+    WalletInitializeRequest,
+    WalletResetRequest,
+    WalletResponse,
+)
 
-__all__ = ["DatabaseHealth", "HealthResponse", "PingResponse", "ServiceStatus"]
+__all__ = [
+    "DatabaseHealth",
+    "HealthResponse",
+    "PingResponse",
+    "ServiceStatus",
+    "WalletInitializeRequest",
+    "WalletResetRequest",
+    "WalletResponse",
+]

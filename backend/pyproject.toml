@@ -1,0 +1,9 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# Async fixtures must share the event loop of the test that uses them.
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q --strict-markers"
+# /app is root-owned in the container; keep the cache somewhere writable.
+cache_dir = "/tmp/.pytest_cache"
+filterwarnings = ["error::DeprecationWarning:app.*"]

@@ -5,11 +5,13 @@ Run with:  uvicorn app.main:app --reload
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_router
 from app.core.config import settings
+from app.core.exceptions import DomainError
 from app.core.logging import configure_logging, get_logger
 from app.db.session import dispose_engine
 
@@ -52,6 +54,14 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    @app.exception_handler(DomainError)
+    async def domain_error_handler(_: Request, exc: DomainError) -> JSONResponse:
+        """Translate business-rule failures into structured HTTP responses."""
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error": {"code": exc.code, "message": exc.message}},
+        )
+
     app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
     @app.get("/", tags=["root"], summary="Service banner")
@@ -61,6 +71,7 @@ def create_app() -> FastAPI:
             "version": settings.APP_VERSION,
             "docs": "/docs",
             "health": f"{settings.API_V1_PREFIX}/health",
+            "wallet": f"{settings.API_V1_PREFIX}/wallet",
         }
 
     return app

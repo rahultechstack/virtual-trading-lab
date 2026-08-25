@@ -1,10 +1,10 @@
 """SQLAlchemy models.
 
-Intentionally empty in Stage 1. Domain models (Wallet, Order, Position, Trade,
-Instrument) arrive with the trading-logic stage and must be imported here so
-Alembic autogenerate can see them.
+Every model must be imported here so that ``Base.metadata`` is fully populated
+before Alembic autogenerate inspects it.
 """
 
 from app.db.base import Base
+from app.models.wallet import WALLET_ID, Wallet
 
-__all__ = ["Base"]
+__all__ = ["Base", "Wallet", "WALLET_ID"]
