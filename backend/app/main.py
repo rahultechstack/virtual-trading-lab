@@ -15,6 +15,7 @@ from app.core.exceptions import DomainError
 from app.core.logging import configure_logging, get_logger
 from app.db.session import dispose_engine
 from app.market_data.registry import close_provider
+from app.realtime.price_stream import shutdown_price_stream
 
 logger = get_logger(__name__)
 
@@ -32,6 +33,7 @@ async def lifespan(_: FastAPI):
     )
     yield
     logger.info("Shutting down.")
+    await shutdown_price_stream()
     await close_provider()
     await dispose_engine()
 
@@ -76,6 +78,7 @@ def create_app() -> FastAPI:
             "wallet": f"{settings.API_V1_PREFIX}/wallet",
             "market_data": f"{settings.API_V1_PREFIX}/market-data",
             "trading": f"{settings.API_V1_PREFIX}/trading",
+            "stream": f"{settings.API_V1_PREFIX}/stream/prices",
         }
 
     return app

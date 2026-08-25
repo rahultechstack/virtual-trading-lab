@@ -1,0 +1,502 @@
+/* ==========================================================================
+   Trading terminal
+   ========================================================================== */
+
+.terminal {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 16px;
+  gap: 12px;
+}
+
+/* ---- Header ---- */
+
+.terminal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 14px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.instrument {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.instrument__id {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.instrument__symbol {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.instrument__exchange {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+.instrument__price {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.instrument__last {
+  font-size: 30px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  transition: color 200ms ease;
+}
+
+.instrument__change {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.instrument__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.instrument__source {
+  font-size: 11px;
+}
+
+/* ---- Layout ---- */
+
+.terminal__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 12px;
+  align-items: start;
+  flex: 1;
+}
+
+.terminal__main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.terminal__side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: sticky;
+  top: 16px;
+}
+
+.terminal__footer {
+  padding: 8px 4px;
+  font-size: 11px;
+  text-align: center;
+}
+
+@media (max-width: 1080px) {
+  .terminal__body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .terminal__side {
+    position: static;
+    /* Order entry first on narrow screens: it is what you reach for. */
+    order: -1;
+  }
+}
+
+/* ---- Panels ---- */
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.panel__title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.panel__subtitle {
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* ---- Chart ---- */
+
+.chart__canvas {
+  height: 420px;
+  width: 100%;
+}
+
+.chart__timeframes {
+  display: flex;
+  gap: 4px;
+}
+
+.chart__footer {
+  padding-top: 8px;
+  font-size: 11px;
+}
+
+@media (max-width: 700px) {
+  .chart__canvas {
+    height: 300px;
+  }
+}
+
+/* ---- Chips, tabs, buttons ---- */
+
+.chip {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+
+.chip:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.chip--active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.tabs {
+  display: flex;
+  gap: 2px;
+}
+
+.tab {
+  padding: 6px 14px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab--active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.button-primary {
+  width: 100%;
+  padding: 9px 14px;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* ---- Order entry ---- */
+
+.field {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.field__label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.field__input {
+  width: 100%;
+  padding: 9px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.field__input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.quick-quantities {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.quick-quantities .chip {
+  flex: 1;
+}
+
+.order-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.order-button {
+  padding: 11px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: filter 120ms ease;
+}
+
+.order-button:hover:not(:disabled) {
+  filter: brightness(1.15);
+}
+
+.order-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.order-button--buy {
+  background: rgba(46, 168, 106, 0.16);
+  border-color: rgba(46, 168, 106, 0.45);
+  color: var(--ok);
+}
+
+.order-button--sell {
+  background: rgba(217, 83, 79, 0.16);
+  border-color: rgba(217, 83, 79, 0.45);
+  color: var(--err);
+}
+
+.form-note {
+  margin: 10px 0 0;
+  font-size: 11px;
+}
+
+.fill-receipt {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.fill-receipt__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+/* ---- Metrics ---- */
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 12px;
+}
+
+.metric--total {
+  margin: 12px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.metric__label {
+  color: var(--text-muted);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.metric__value {
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.kv--tight {
+  grid-template-columns: 1fr auto;
+  gap: 5px 12px;
+  font-size: 12px;
+}
+
+.kv--tight dd {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Tables ---- */
+
+.table-scroll {
+  overflow-x: auto;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.table th {
+  position: sticky;
+  top: 0;
+  padding: 6px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid rgba(42, 47, 58, 0.5);
+  white-space: nowrap;
+}
+
+.table tbody tr:hover {
+  background: var(--surface-alt);
+}
+
+.table .numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.table--position td {
+  padding: 10px;
+  font-size: 13px;
+}
+
+.table-empty {
+  padding: 20px 0;
+  text-align: center;
+  font-size: 12px;
+}
+
+.reason {
+  display: block;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10px;
+}
+
+/* ---- Banners and tone ---- */
+
+.banner {
+  margin: 0;
+  padding: 9px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.banner--warning {
+  background: rgba(217, 83, 79, 0.1);
+  border: 1px solid rgba(217, 83, 79, 0.3);
+  color: var(--err);
+}
+
+.banner--error {
+  background: rgba(217, 154, 43, 0.1);
+  border: 1px solid rgba(217, 154, 43, 0.35);
+  color: var(--warn);
+}
+
+.positive {
+  color: var(--ok);
+}
+
+.negative {
+  color: var(--err);
+}
+
+.flat {
+  color: var(--text);
+}
+
+.badge--ok {
+  background: rgba(46, 168, 106, 0.16);
+  color: var(--ok);
+}

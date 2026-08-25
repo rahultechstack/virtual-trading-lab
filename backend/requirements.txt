@@ -1,10 +1,12 @@
 # ---------------------------------------------------------------------------
-# Stage 1 runtime dependencies ONLY.
-# Market data, indicators, scheduling and analytics libraries are added in the
-# stage that actually uses them (pandas, numpy, pandas-ta, APScheduler, ...).
+# Runtime dependencies.
+# Libraries are added in the stage that actually uses them; analytics
+# (pandas, numpy, pandas-ta) arrive with the indicator stage.
 # ---------------------------------------------------------------------------
 
 fastapi==0.115.6
+# [standard] brings uvloop, httptools and websockets, which the live price
+# stream needs.
 uvicorn[standard]==0.34.0
 
 # Settings / validation
@@ -13,6 +15,9 @@ pydantic-settings==2.7.0
 
 # Market-data HTTP client
 httpx==0.28.1
+
+# Background jobs: polls the market-data provider for the live price stream.
+APScheduler==3.11.0
 
 # Database
 SQLAlchemy[asyncio]==2.0.36

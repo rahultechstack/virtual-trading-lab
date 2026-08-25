@@ -10,6 +10,7 @@ from collections.abc import Callable
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.market_data.base import MarketDataProvider
+from app.market_data.mock import MockMarketDataProvider
 from app.market_data.yahoo import YahooFinanceProvider
 
 logger = get_logger(__name__)
@@ -19,9 +20,14 @@ def _build_yahoo() -> MarketDataProvider:
     return YahooFinanceProvider(timeout_seconds=settings.MARKET_DATA_TIMEOUT_SECONDS)
 
 
+def _build_mock() -> MarketDataProvider:
+    return MockMarketDataProvider.from_settings()
+
+
 #: Registered providers, keyed by the value of MARKET_DATA_PROVIDER.
 _PROVIDERS: dict[str, Callable[[], MarketDataProvider]] = {
     "yahoo": _build_yahoo,
+    "mock": _build_mock,
 }
 
 _instance: MarketDataProvider | None = None
@@ -52,7 +58,14 @@ def get_provider() -> MarketDataProvider:
     global _instance
     if _instance is None:
         _instance = create_provider()
-        logger.info("Market-data provider: %s", _instance.capabilities.name)
+        capabilities = _instance.capabilities
+        logger.info("Market-data provider: %s", capabilities.name)
+        if capabilities.is_mock:
+            logger.warning(
+                "MOCK MARKET DATA IS ACTIVE. Prices are simulated and have no "
+                "relationship to the real market. Set MARKET_DATA_PROVIDER to a "
+                "real provider before relying on anything this returns."
+            )
     return _instance
 
 

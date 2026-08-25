@@ -71,6 +71,21 @@ class Settings(BaseSettings):
     MARKET_DATA_API_KEY: SecretStr | None = None
     MARKET_DATA_API_SECRET: SecretStr | None = None
 
+    # --- Real-time streaming ----------------------------------------------
+    STREAM_POLL_INTERVAL_SECONDS: float = 5.0
+    STREAM_MAX_CONNECTIONS: int = 50
+    # Derive bid/ask from the spread model when the provider has no depth.
+    # Ticks label these as "modelled" so they are never mistaken for real.
+    STREAM_MODEL_BID_ASK: bool = True
+
+    # --- Mock provider (MARKET_DATA_PROVIDER=mock) -------------------------
+    # Simulated data for development. Never enable this in production.
+    MOCK_BASE_PRICE: Decimal = Decimal("1400")
+    MOCK_VOLATILITY_BPS: Decimal = Decimal("15")
+    MOCK_SPREAD_BPS: Decimal = Decimal("4")
+    MOCK_TICK_INTERVAL_SECONDS: float = 2.0
+    MOCK_SEED: int | None = None
+
     # --- Execution realism -----------------------------------------------
     # Which charge schedule applies: INTRADAY or DELIVERY. Intraday is the
     # default because Indian cash-market shorts must be squared off same day.

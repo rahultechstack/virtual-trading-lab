@@ -3,12 +3,12 @@
 Single-user, single-instrument **paper trading** platform. No real money, no
 broker connectivity, no login — there is exactly one virtual wallet.
 
-> **Current stage: 5 — Realistic execution.**
-> Stages 1-4 delivered the project structure, the wallet, a
-> provider-agnostic market-data layer and the trading engine. Stage 5 makes
-> execution realistic: bid/ask spread, slippage, Indian equity charges, and
-> gross / charges / net P&L. Charts, WebSocket streaming, strategies, ML and
-> backtesting are **not** implemented.
+> **Current stage: 7 — Trading terminal.**
+> Stages 1-6 delivered the project structure, the wallet, a
+> provider-agnostic market-data layer, the trading engine, realistic execution
+> costs and live price streaming. Stage 7 adds the terminal UI: candlestick
+> chart, order entry, wallet, position, orders and trade history. Technical
+> indicators, strategies, ML and backtesting are **not** implemented.
 
 ## Stack
 
@@ -17,7 +17,8 @@ broker connectivity, no login — there is exactly one virtual wallet.
 | Frontend   | React 18 + TypeScript + Vite                |
 | Backend    | FastAPI + Python 3.11                       |
 | Database   | PostgreSQL 16 (Docker), SQLAlchemy 2 async  |
-| Migrations | Alembic (wired, no domain tables yet)       |
+| Migrations | Alembic                                     |
+| Real-time  | WebSocket + APScheduler polling             |
 
 ## Prerequisites
 
@@ -43,6 +44,7 @@ my-project/
 │       ├── schemas/       Pydantic contracts
 │       ├── repositories/  data access — all SQL lives here
 │       ├── market_data/   provider abstraction + integrations
+│       ├── realtime/      WebSocket manager + price stream
 │       ├── trading/       the trading engine (no web, no provider deps)
 │       ├── services/      business logic + transaction boundaries
 │       └── api/v1/        HTTP endpoints
@@ -52,8 +54,10 @@ my-project/
     └── src/
         ├── api/           HTTP client + endpoint functions
         ├── types/         TS contracts mirroring backend schemas
-        ├── hooks/         data fetching
-        ├── components/    UI
+        ├── hooks/         useLivePrice (WebSocket), useAccount (REST)
+        ├── utils/         display formatting
+        ├── components/
+        │   └── terminal/  the trading terminal
         └── styles/
 ```
 
@@ -188,6 +192,8 @@ If port 5432, 8000 or 5173 is already taken, change `POSTGRES_HOST_PORT`,
 | GET    | `/api/v1/trading/trades`      | Trade history                            |
 | GET    | `/api/v1/trading/position`    | Current position                         |
 | GET    | `/api/v1/trading/portfolio`   | Cash, position and P&L                   |
+| WS     | `/api/v1/stream/prices`       | Live price stream                        |
+| GET    | `/api/v1/stream/status`       | Stream mode, provider and connections    |
 | GET    | `/docs`                       | Swagger UI                               |
 
 ### Wallet
@@ -586,6 +592,214 @@ Each trade row stores the whole breakdown: reference price, bid, ask,
 execution price, spread cost, slippage cost, every charge line, gross P&L and
 net P&L.
 
+## Real-time prices
+
+### Pipeline
+
+```
+market-data provider  ->  PriceStreamService  ->  ConnectionManager  ->  WebSocket  ->  React
+```
+
+The service picks its mode from the provider's declared capabilities:
+
+| Mode     | When                                     | Used by        |
+| -------- | ---------------------------------------- | -------------- |
+| **push** | provider implements `subscribe_live_data` | `mock`         |
+| **poll** | it does not                               | `yahoo`        |
+
+> **Yahoo has no push feed.** There is no public WebSocket for it, so "real
+> time" with the default provider means *polled every `STREAM_POLL_INTERVAL_SECONDS`*
+> and fanned out. Every tick carries `"mode": "poll"` so the client knows what
+> it is looking at. Polling **pauses entirely when no client is connected**, so
+> an idle server makes no upstream calls.
+
+Yahoo also carries no order-book depth (see [Market data](#market-data)), so
+bid and ask are derived from the Stage 5 spread model and labelled
+`"bid_ask_source": "modelled"`. The UI shows a **modelled** tag beside them —
+a synthetic spread is never presented as a real book.
+
+### WebSocket protocol
+
+Connect to `ws://localhost:8000/api/v1/stream/prices`. Frames:
+
+| Type     | When                    | Contents                                |
+| -------- | ----------------------- | --------------------------------------- |
+| `status` | once, on connect        | provider, mode, `is_mock`, connections  |
+| `tick`   | on every price update   | the quote (below)                       |
+| `error`  | upstream feed failed    | message and detail; stream stays open   |
+| `pong`   | reply to a client `ping`| server time                             |
+
+The only client message understood is `{"type": "ping"}`, a heartbeat that
+keeps idle proxies from dropping the socket.
+
+```json
+{
+  "type": "tick",
+  "data": {
+    "symbol": "RELIANCE", "exchange": "NSE",
+    "last_price": "1317.00",
+    "bid": "1316.87", "ask": "1317.13", "bid_ask_source": "modelled",
+    "volume": 7100252, "timestamp": "2026-08-25T09:44:59+00:00",
+    "change": "7.20", "change_percent": "0.55",
+    "provider": "yahoo", "is_mock": false, "is_delayed": false,
+    "mode": "poll"
+  }
+}
+```
+
+### Connection handling
+
+**Server** (`app/realtime/connection_manager.py`) — sends run concurrently so
+one slow client cannot stall the broadcast; a socket that fails a send is
+reaped from the pool rather than retried forever; membership changes happen
+under a lock so the set is never mutated mid-broadcast; `STREAM_MAX_CONNECTIONS`
+is enforced and a refused client is told why before the socket closes.
+
+**Client** (`frontend/src/hooks/useLivePrice.ts`) — reconnects automatically
+with exponential backoff from 1s to 15s **plus jitter**, so a backend restart
+needs no page refresh and many tabs do not stampede on recovery. It pings every
+25s, flags the price **STALE** if no tick arrives for 30s, and offers a manual
+*Retry now*.
+
+### Mock mode
+
+Selected with `MARKET_DATA_PROVIDER=mock`. It generates a random walk, and
+unlike Yahoo it supports both real bid/ask and true push streaming — so it is
+the only way to exercise `subscribe_live_data` end to end.
+
+```bash
+# backend/.env
+MARKET_DATA_PROVIDER=mock
+
+docker compose up -d --force-recreate backend
+```
+
+Mock mode is impossible to mistake for production: the provider is named
+`mock`, every quote carries `is_mock: true`, the capabilities list opens with
+`SIMULATED DATA`, the backend logs a **warning** at startup, and the UI shows a
+red **SIMULATED** badge with a banner.
+
+> Note that `docker compose restart` does **not** re-read `env_file` — use
+> `up -d --force-recreate` after changing `backend/.env`.
+
+### Seeing it work
+
+Open <http://localhost:5173>. The card shows RELIANCE with last price, bid,
+ask, volume and timestamp, updating in place with a green/red flash on each
+move.
+
+**If the price looks frozen on the `yahoo` provider, that is expected outside
+NSE hours** (09:15–15:30 IST). The socket is live and ticks keep arriving —
+the last traded price simply is not changing. Switch to `mock` to watch it
+move at any hour.
+
+Check what is actually running:
+
+```bash
+curl http://localhost:8000/api/v1/stream/status
+```
+
+There is also a manual socket probe:
+
+```bash
+docker compose exec backend python tests/_ws_probe.py \
+  ws://localhost:8000/api/v1/stream/prices 3
+```
+
+### Configuration
+
+```bash
+STREAM_POLL_INTERVAL_SECONDS=5   # poll cadence when there is no push feed
+STREAM_MAX_CONNECTIONS=50
+STREAM_MODEL_BID_ASK=true        # false reports depth as unavailable instead
+
+MOCK_BASE_PRICE=1400
+MOCK_VOLATILITY_BPS=15
+MOCK_SPREAD_BPS=4
+MOCK_TICK_INTERVAL_SECONDS=2
+# MOCK_SEED=42                   # makes the walk reproducible
+```
+
+## Trading terminal
+
+Open <http://localhost:5173>.
+
+```
++------------------------------------------------------------------+
+|  RELIANCE  NSE     Rs 1,317.00  +7.20 (+0.55%)      [Live] badges |
++---------------------------------------------+--------------------+
+|  Candlestick chart   1m 5m 15m 1H 1D 1W     |  Order             |
+|  ..                                          |   quantity         |
+|  .. price + volume                           |   Buy / Sell       |
+|  ..                                          |   Short / Cover    |
++---------------------------------------------+                    |
+|  Position   qty  avg  current  unrealized    |  Wallet            |
++---------------------------------------------+   cash, equity     |
+|  [ Orders | Trades ]                         |   realized, net    |
+|  time  side  qty  price  status               |   unrealized       |
++---------------------------------------------+--------------------+
+```
+
+Order entry sits first on narrow screens; the layout collapses to a single
+column below 1080px.
+
+### Two data paths
+
+| Path          | Carries                                | Why                                    |
+| ------------- | -------------------------------------- | -------------------------------------- |
+| **WebSocket** | live price ticks                       | one stream, no polling from the browser |
+| **REST**      | orders, wallet, position, history      | commands and account state              |
+
+A fill changes the wallet, the position and both histories at once, so
+`useAccount` reloads all of them together from one consistent set of reads
+rather than patching each panel separately.
+
+### Chart
+
+TradingView Lightweight Charts (v4). The chart instance is created once and
+kept in refs -- only its *data* is replaced when the timeframe changes, so
+panning and zooming survive a switch. Live ticks mutate the most recent bar in
+place via `series.update()`, so the forming candle grows the way it does on a
+real terminal without refetching history.
+
+Timeframes map straight onto the market-data intervals: 1m, 5m, 15m, 1H, 1D,
+1W. Volume renders as a histogram on its own price scale beneath price.
+
+### Precision
+
+Every monetary value crosses the wire as a **string** carrying a Decimal.
+`utils/format.ts` converts to a number only at the moment of rendering, and no
+arithmetic is ever done on the result.
+
+That is also why unrealized P&L is fetched from `GET /trading/portfolio?mark_price=...`
+rather than computed in the browser: the server does that arithmetic in
+Decimal. The request is throttled to once every 3 seconds so a fast feed does
+not hammer the API.
+
+### Honest display
+
+The terminal shows where its numbers come from rather than leaving it to be
+inferred:
+
+* a **SIMULATED** badge and a banner whenever the mock provider is active;
+* **DELAYED** and **STALE** badges when they apply;
+* the provider and its mode (`push` / `polled 5s`) in the header;
+* realized P&L shown **gross, charges and net** in the wallet panel, and every
+  trade row carrying all three -- a terminal that showed only the gross figure
+  would flatter every result.
+
+### Order entry
+
+Quantity plus the four sides. The live price is sent as the **reference**
+price; the backend derives the actual fill from it through the spread and
+slippage models, so the price on screen is deliberately not promised as the
+execution price. After a fill, a receipt shows the execution price, the
+charges and the net P&L.
+
+Buttons are disabled until there is a live price and a wallet. Rejections --
+insufficient funds, selling more than held -- surface the backend's message
+verbatim.
+
 ## Migrations
 
 Alembic runs inside the backend container. Drop `docker compose exec backend`
@@ -626,7 +840,7 @@ docker compose exec backend pytest tests/test_wallet_persistence.py
 cd backend && pip install -r requirements-dev.txt && pytest
 ```
 
-173 tests.
+220 tests.
 
 * **Wallet** - creation, retrieval, reset, persistence across a simulated
   restart, decimal precision, singleton and non-negative constraints.
@@ -649,11 +863,18 @@ cd backend && pip install -r requirements-dev.txt && pytest
   losing long and short trades end to end, each traced from reference price
   through spread, slippage and charges to gross, charges and net P&L, with the
   wallet reconciled against the arithmetic.
+* **Real-time** (`test_realtime.py`) - connection manager (connect, disconnect,
+  broadcast, dead-client reaping, limits, concurrency), the mock provider
+  (determinism, bounds, streaming) and the price stream (mode selection, tick
+  shape, modelled-depth labelling, idle-poll skipping, failure and recovery).
+* **WebSocket endpoint** (`test_stream_endpoint.py`) - handshake, tick
+  delivery, prices actually changing, late joiners, ping/pong, disconnection
+  and the connection limit. Drives the ASGI app directly - no server, no
+  network.
 
 ## Not in this stage
 
 Margin and leverage rules, partial fills, order-book matching, limit and stop
-orders, WebSocket streaming, the React trading UI, TradingView charts,
-technical indicators, strategies, ML, backtesting, market-data persistence,
-Redis and APScheduler jobs. Authentication is out of scope permanently - this
-is a single-user local system by design.
+orders, technical indicators, strategies, ML, backtesting, market-data
+persistence and Redis. Authentication is out of scope permanently - this is a
+single-user local system by design.

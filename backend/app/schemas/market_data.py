@@ -60,6 +60,10 @@ class Quote(BaseModel):
     is_delayed: bool = Field(
         description="True when the provider serves this quote on a delay."
     )
+    is_mock: bool = Field(
+        default=False,
+        description="True when this price was simulated, not observed.",
+    )
 
 
 class Candle(BaseModel):
@@ -105,6 +109,10 @@ class ProviderCapabilities(BaseModel):
         description="Nominal delay. 0 means the feed is served without one."
     )
     requires_credentials: bool
+    is_mock: bool = Field(
+        default=False,
+        description="True when this provider invents data rather than observing it.",
+    )
     supported_intervals: list[Interval]
     limitations: list[str] = Field(
         default_factory=list,

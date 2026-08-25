@@ -40,6 +40,10 @@ code {
   padding: 48px 24px;
 }
 
+body {
+  min-height: 100vh;
+}
+
 .app__header h1 {
   margin: 0 0 4px;
   font-size: 26px;
@@ -147,3 +151,67 @@ button:disabled {
 .alert p {
   margin: 6px 0 0;
 }
+
+/* ---- Live price ---- */
+
+.badge--conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-alt);
+  color: var(--text-muted);
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.badge--live {
+  color: var(--ok);
+}
+
+.badge--live .dot {
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+.badge--connecting,
+.badge--reconnecting {
+  color: var(--warn);
+}
+
+.badge--offline {
+  color: var(--err);
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.tag {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: help;
+}
+
+.alert--compact {
+  margin-top: 16px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
