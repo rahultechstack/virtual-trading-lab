@@ -5,13 +5,16 @@ and back. The engine is usable without them.
 """
 
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Annotated
 
 from fastapi import APIRouter, Query, status
 
 from app.api.deps import DbSession
-from app.models.enums import OrderStatus
+from app.models.enums import OrderSide, OrderStatus
 from app.schemas.trading import (
+    ChargesResponse,
+    ExecutionCostPreview,
     OrderResponse,
     OrderResultResponse,
     PlaceOrderRequest,
@@ -20,6 +23,7 @@ from app.schemas.trading import (
     TradeResponse,
 )
 from app.trading.engine import TradingEngine
+from app.trading.execution import ExecutionEngine
 
 router = APIRouter(prefix="/trading", tags=["trading"])
 
@@ -39,13 +43,14 @@ async def place_order(
 ) -> OrderResultResponse:
     """Execute an order atomically against the virtual account.
 
-    Fills at ``execution_price``. Order, trade, position and wallet all move
-    together or not at all.
+    The fill price is derived from ``reference_price`` by the spread and
+    slippage models, then charges are applied. Order, trade, position and
+    wallet all move together or not at all.
     """
     result = await TradingEngine(session).place_order(
         side=payload.side,
         quantity=payload.quantity,
-        execution_price=payload.execution_price,
+        reference_price=payload.reference_price,
         symbol=payload.symbol,
         requested_price=payload.requested_price,
     )
@@ -53,7 +58,9 @@ async def place_order(
         order=OrderResponse.model_validate(result.order),
         trade=TradeResponse.model_validate(result.trade),
         position=PositionResponse.model_validate(result.position),
-        realized_pnl=result.realized_pnl,
+        gross_pnl=result.gross_pnl,
+        total_charges=result.total_charges,
+        net_pnl=result.net_pnl,
         cash_delta=result.cash_delta,
     )
 
@@ -115,3 +122,47 @@ async def get_portfolio(
     """
     snapshot = await TradingEngine(session).get_portfolio(mark_price=mark_price)
     return PortfolioResponse(**vars(snapshot))
+
+
+@router.get(
+    "/execution-cost",
+    response_model=ExecutionCostPreview,
+    summary="Preview spread, slippage and charges without trading",
+)
+async def preview_execution_cost(
+    session: DbSession,
+    side: Annotated[OrderSide, Query(description="Side to price.")],
+    quantity: Annotated[int, Query(ge=1, le=10_000_000)],
+    reference_price: Annotated[Decimal, Query(gt=0, description="Mid price.")],
+) -> ExecutionCostPreview:
+    """Price a hypothetical order.
+
+    Runs the same spread, slippage and fee models the engine uses, but writes
+    nothing -- useful for seeing what an order would actually cost.
+    """
+    engine = ExecutionEngine(session)
+    order = SimpleNamespace(side=side, quantity=quantity)
+    fill = engine.execute(order, reference_price)
+
+    return ExecutionCostPreview(
+        side=side,
+        quantity=quantity,
+        reference_price=reference_price,
+        bid_price=fill.quote.bid,
+        ask_price=fill.quote.ask,
+        spread=fill.quote.spread,
+        execution_price=fill.price,
+        spread_cost=fill.spread_cost,
+        slippage_cost=fill.slippage_cost,
+        charges=ChargesResponse(
+            brokerage=fill.charges.brokerage,
+            stt=fill.charges.stt,
+            exchange_charges=fill.charges.exchange_charges,
+            sebi_charges=fill.charges.sebi_charges,
+            stamp_duty=fill.charges.stamp_duty,
+            gst=fill.charges.gst,
+            dp_charges=fill.charges.dp_charges,
+            total_charges=fill.charges.total,
+        ),
+        total_execution_cost=fill.execution_cost,
+    )

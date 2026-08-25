@@ -3,12 +3,12 @@
 Single-user, single-instrument **paper trading** platform. No real money, no
 broker connectivity, no login — there is exactly one virtual wallet.
 
-> **Current stage: 4 — Virtual trading engine.**
-> Stages 1-3 delivered the project structure, the persistent wallet and a
-> provider-agnostic market-data layer. Stage 4 adds the trading engine: buy,
-> sell, short sell and cover, with positions, trades and P&L persisted
-> atomically. Charts, WebSocket streaming, strategies, ML and backtesting are
-> **not** implemented.
+> **Current stage: 5 — Realistic execution.**
+> Stages 1-4 delivered the project structure, the wallet, a
+> provider-agnostic market-data layer and the trading engine. Stage 5 makes
+> execution realistic: bid/ask spread, slippage, Indian equity charges, and
+> gross / charges / net P&L. Charts, WebSocket streaming, strategies, ML and
+> backtesting are **not** implemented.
 
 ## Stack
 
@@ -183,6 +183,7 @@ If port 5432, 8000 or 5173 is already taken, change `POSTGRES_HOST_PORT`,
 | GET    | `/api/v1/market-data/candles` | Historical OHLCV candles                 |
 | GET    | `/api/v1/market-data/provider`| Feed capabilities and limitations        |
 | POST   | `/api/v1/trading/orders`      | Place an order                           |
+| GET    | `/api/v1/trading/execution-cost` | Preview spread, slippage and charges  |
 | GET    | `/api/v1/trading/orders`      | Order history (includes rejections)      |
 | GET    | `/api/v1/trading/trades`      | Trade history                            |
 | GET    | `/api/v1/trading/position`    | Current position                         |
@@ -352,10 +353,18 @@ They are typed `SecretStr`, so they cannot leak into logs or tracebacks.
 TradingEngine                 orchestration + the transaction boundary
   |-- OrderManager            order rows and their state
   |-- ExecutionEngine         fills and trade records
+  |     |-- SpreadModel       bid/ask derivation
+  |     |-- SlippageModel     adverse price movement
+  |     +-- FeeCalculator     brokerage and statutory charges
   |-- PositionManager         position accounting
   |-- PortfolioManager        cash movement and valuation
   +-- PnLCalculator           the arithmetic
 ```
+
+The three cost models are **injected** into `ExecutionEngine`, so any of them
+can be swapped or switched off without touching the engine, and each is
+independently testable. `ExecutionEngine.frictionless(session)` disables all
+three -- useful for isolating position accounting from execution costs.
 
 The engine imports no web framework and no market-data provider. Execution
 prices are passed in, so the same engine can be driven by an HTTP request, a
@@ -384,18 +393,23 @@ Selling more than you hold is a short, so it must be stated explicitly with
 
 ### Cash model
 
-Cash moves with the fill and nothing else: a buy debits `quantity x price`, a
-sell credits it. One rule covers all four sides and yields correct P&L in both
-directions:
+Cash moves with the fill, and charges always come out of it: a buy debits
+`quantity x price` **plus** charges, a sell credits it **minus** charges. One
+rule covers all four sides and yields correct P&L in both directions:
 
 ```
-Long   BUY   100 @ 1400  (-140,000),  SELL  100 @ 1450  (+145,000)  ->  +5,000
-Short  SHORT 100 @ 1450  (+145,000),  COVER 100 @ 1400  (-140,000)  ->  +5,000
+Long   BUY   100 @ 1400  (-140,000),  SELL  100 @ 1450  (+145,000)  ->  +5,000 gross
+Short  SHORT 100 @ 1450  (+145,000),  COVER 100 @ 1400  (-140,000)  ->  +5,000 gross
 ```
 
-Debits are checked before they are applied, so an unaffordable order raises
-`insufficient_funds` rather than tripping the wallet non-negative constraint
-at COMMIT.
+Net P&L is that gross figure less the charges on **both** legs. Spread and
+slippage are already embedded in the execution price, so they are not deducted
+again -- they are recorded separately on the trade so the damage stays visible.
+
+Debits are checked before they are applied -- charges included, so an order
+that just fits on notional alone can still be rejected -- and an unaffordable
+order raises `insufficient_funds` rather than tripping the wallet non-negative
+constraint at COMMIT.
 
 > **Known gap.** Short proceeds are credited as spendable cash and no margin is
 > reserved against an open short, so short size is not bounded by account
@@ -450,6 +464,128 @@ Portfolio valuation takes `mark_price` as a **query parameter** rather than
 fetching it, which is what keeps the engine independent of the market-data
 layer. Without it, unrealized P&L and position value report zero.
 
+## Realistic execution
+
+### How a fill is priced
+
+The caller supplies a **reference price** (a mid). The engine derives the
+actual fill from it in two adverse steps, then prices the charges:
+
+```
+reference (mid)
+    |  SpreadModel     buys lift the ask, sells hit the bid
+    v
+quoted price
+    |  SlippageModel   the book moves against you in flight
+    v
+execution price
+    |  FeeCalculator   brokerage, STT, exchange, SEBI, stamp duty, GST
+    v
+Fill(price, spread_cost, slippage_cost, charges)
+```
+
+Both price models are **always adverse** -- a fill is never better than the
+reference. A model that could help you would flatter every backtest built on
+it.
+
+Note that spread and slippage are *proportional to price*, so the same
+basis-point setting costs more in absolute terms on a higher-priced leg.
+
+Modelling the spread matters here because the configured market-data provider
+supplies no order-book depth -- `bid` and `ask` come back null (see
+[Market data](#market-data)), so the spread has to be modelled rather than
+observed.
+
+### Charges modelled
+
+NSE cash segment, with `INTRADAY` the default because Indian cash-market
+shorts must be squared off the same day:
+
+| Charge              | Intraday                    | Delivery                   |
+| ------------------- | --------------------------- | -------------------------- |
+| Brokerage           | % of turnover, capped/order | usually zero               |
+| STT                 | sell side only              | both sides, higher rate    |
+| Exchange txn charge | both sides                  | both sides                 |
+| SEBI turnover fee   | both sides                  | both sides                 |
+| Stamp duty          | buy side only               | buy side only, higher rate |
+| GST                 | on brokerage + txn + SEBI    | same                       |
+| DP charges          | none                        | flat, sell side only       |
+
+GST applies to the broker's and exchange's fees, never to the statutory taxes.
+STT and stamp duty are rounded to the **nearest rupee**, as on a real contract
+note; everything else stays in paise. That rounding makes charges slightly
+non-linear in trade size, which is correct rather than a defect.
+
+> **Rates change.** Every rate is a setting, not a literal -- exchange
+> transaction charges and stamp duty in particular have been revised
+> repeatedly. The defaults reflect a typical NSE discount broker; verify them
+> against your broker's current schedule before treating the numbers as
+> authoritative.
+
+### Configuration
+
+All of it lives in `backend/.env`:
+
+```bash
+EXECUTION_SEGMENT=INTRADAY      # or DELIVERY
+SPREAD_BPS=2                    # FULL spread; half applied each side
+SLIPPAGE_MODEL=FIXED_BPS        # NONE | FIXED_BPS | PERCENT
+SLIPPAGE_BPS=2
+CHARGES_ENABLED=true            # false for frictionless simulation
+
+BROKERAGE_PERCENT=0.03
+BROKERAGE_MAX_PER_ORDER=20
+STT_INTRADAY_SELL_PERCENT=0.025
+STT_DELIVERY_PERCENT=0.1
+EXCHANGE_TXN_PERCENT=0.00297
+SEBI_CHARGES_PERCENT=0.0001
+STAMP_DUTY_INTRADAY_BUY_PERCENT=0.003
+STAMP_DUTY_DELIVERY_BUY_PERCENT=0.015
+GST_PERCENT=18
+DP_CHARGES_PER_SELL=0
+```
+
+### Preview what an order would cost
+
+```bash
+curl "http://localhost:8000/api/v1/trading/execution-cost?side=BUY&quantity=100&reference_price=1400"
+```
+
+```json
+{
+  "reference_price": "1400", "bid_price": "1399.86", "ask_price": "1400.14",
+  "spread": "0.28", "execution_price": "1400.42",
+  "spread_cost": "14.00", "slippage_cost": "28.00",
+  "charges": {
+    "brokerage": "20.00", "stt": "0.00", "exchange_charges": "4.16",
+    "sebi_charges": "0.14", "stamp_duty": "4", "gst": "4.37",
+    "dp_charges": "0.00", "total_charges": "32.67"
+  },
+  "total_execution_cost": "74.67"
+}
+```
+
+Runs the same models the engine uses, but writes nothing.
+
+### A worked round trip
+
+Buy 100 around 1400, sell 100 around 1450, on the default settings:
+
+```
+ENTRY  exec 1400.42   gross     0.00   charges 32.67   net    -32.67
+EXIT   exec 1449.57   gross 4,915.00   charges 64.85   net  4,850.15
+                                       ------------------------------
+round trip                             charges 97.52   net  4,817.48
+```
+
+The naive 50-point move looks like 5,000. After crossing the spread twice,
+slipping twice and paying both contract notes, 4,817.48 is what the account
+actually keeps -- and the wallet balance matches that to the paisa.
+
+Each trade row stores the whole breakdown: reference price, bid, ask,
+execution price, spread cost, slippage cost, every charge line, gross P&L and
+net P&L.
+
 ## Migrations
 
 Alembic runs inside the backend container. Drop `docker compose exec backend`
@@ -490,7 +626,7 @@ docker compose exec backend pytest tests/test_wallet_persistence.py
 cd backend && pip install -r requirements-dev.txt && pytest
 ```
 
-121 tests.
+173 tests.
 
 * **Wallet** - creation, retrieval, reset, persistence across a simulated
   restart, decimal precision, singleton and non-negative constraints.
@@ -504,12 +640,20 @@ cd backend && pip install -r requirements-dev.txt && pytest
 * **Trading engine** (`test_trading_engine.py`) - the same cases against real
   PostgreSQL, plus cash movement, invalid orders, insufficient funds, the
   audit trail, and two atomicity tests that inject a mid-order failure and
-  assert nothing was written.
+  assert nothing was written. Runs on a *frictionless* engine so position
+  accounting stays isolated from execution costs.
+* **Cost models** (`test_execution_costs.py`) - pure, no database: spread
+  derivation and symmetry, slippage adversity in both directions, every charge
+  component, brokerage capping, GST base, rupee rounding, and both segments.
+* **Realistic execution** (`test_realistic_execution.py`) - profitable and
+  losing long and short trades end to end, each traced from reference price
+  through spread, slippage and charges to gross, charges and net P&L, with the
+  wallet reconciled against the arithmetic.
 
 ## Not in this stage
 
-Margin and leverage rules, brokerage, taxes, slippage, partial fills, limit
-and stop orders, WebSocket streaming, the React trading UI, TradingView
-charts, technical indicators, strategies, ML, backtesting, market-data
-persistence, Redis and APScheduler jobs. Authentication is out of scope
-permanently - this is a single-user local system by design.
+Margin and leverage rules, partial fills, order-book matching, limit and stop
+orders, WebSocket streaming, the React trading UI, TradingView charts,
+technical indicators, strategies, ML, backtesting, market-data persistence,
+Redis and APScheduler jobs. Authentication is out of scope permanently - this
+is a single-user local system by design.

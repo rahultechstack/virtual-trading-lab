@@ -71,6 +71,42 @@ class Settings(BaseSettings):
     MARKET_DATA_API_KEY: SecretStr | None = None
     MARKET_DATA_API_SECRET: SecretStr | None = None
 
+    # --- Execution realism -----------------------------------------------
+    # Which charge schedule applies: INTRADAY or DELIVERY. Intraday is the
+    # default because Indian cash-market shorts must be squared off same day.
+    EXECUTION_SEGMENT: str = "INTRADAY"
+
+    # Bid/ask spread, in basis points. This is the FULL spread; half is
+    # applied either side of the reference (mid) price.
+    SPREAD_BPS: Decimal = Decimal("2")
+
+    # Slippage: NONE, FIXED_BPS or PERCENT. Always applied adversely.
+    SLIPPAGE_MODEL: str = "FIXED_BPS"
+    SLIPPAGE_BPS: Decimal = Decimal("2")
+    SLIPPAGE_PERCENT: Decimal = Decimal("0")
+
+    # --- Charges ----------------------------------------------------------
+    # Master switch; turn off for frictionless simulation.
+    CHARGES_ENABLED: bool = True
+
+    # Rates are PERCENTAGES of turnover (0.03 means 0.03%).
+    # These defaults reflect a typical NSE discount broker. Statutory rates
+    # are revised periodically - verify against a current schedule.
+    BROKERAGE_PERCENT: Decimal = Decimal("0.03")
+    BROKERAGE_MAX_PER_ORDER: Decimal | None = Decimal("20")
+
+    STT_INTRADAY_SELL_PERCENT: Decimal = Decimal("0.025")
+    STT_DELIVERY_PERCENT: Decimal = Decimal("0.1")
+
+    EXCHANGE_TXN_PERCENT: Decimal = Decimal("0.00297")
+    SEBI_CHARGES_PERCENT: Decimal = Decimal("0.0001")
+
+    STAMP_DUTY_INTRADAY_BUY_PERCENT: Decimal = Decimal("0.003")
+    STAMP_DUTY_DELIVERY_BUY_PERCENT: Decimal = Decimal("0.015")
+
+    GST_PERCENT: Decimal = Decimal("18")
+    DP_CHARGES_PER_SELL: Decimal = Decimal("0")
+
     # --- Wallet ----------------------------------------------------------
     # Opening capital granted when the wallet is first initialised.
     # Decimal (never float) because this is money.

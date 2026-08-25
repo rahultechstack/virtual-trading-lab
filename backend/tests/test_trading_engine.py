@@ -2,6 +2,11 @@
 
 These cover what the pure accounting tests cannot: cash movement, persistence,
 transaction atomicity and the constraints the database itself enforces.
+
+They run on a **frictionless** engine -- no spread, no slippage, no charges --
+so that position accounting is verified in isolation. Execution costs have
+their own suites in ``test_execution_costs.py`` and
+``test_realistic_execution.py``.
 """
 
 from decimal import Decimal
@@ -21,21 +26,26 @@ from app.models.trading import Order, Position, Trade
 from app.models.wallet import Wallet
 from app.services.wallet_service import WalletService
 from app.trading.engine import TradingEngine
+from app.trading.execution import ExecutionEngine
 
 D = Decimal
 
 
 @pytest.fixture
 async def engine(session) -> TradingEngine:
-    """A trading engine with a funded wallet (INR 10,00,000)."""
+    """A frictionless engine with a funded wallet (INR 10,00,000).
+
+    Fills land exactly on the reference price, so the numbers below isolate
+    position accounting from execution costs.
+    """
     await WalletService(session).initialize_wallet()
-    return TradingEngine(session)
+    return TradingEngine(session, execution=ExecutionEngine.frictionless(session))
 
 
 @pytest.fixture
 async def unfunded_engine(session) -> TradingEngine:
     """A trading engine whose wallet has never been initialised."""
-    return TradingEngine(session)
+    return TradingEngine(session, execution=ExecutionEngine.frictionless(session))
 
 
 async def _cash(session) -> Decimal:
@@ -52,12 +62,12 @@ async def _cash(session) -> Decimal:
 async def test_long_entry_moves_position_and_debits_cash(engine, session):
     """BUY 100 @ 1400 -> +100, cash down 140,000."""
     result = await engine.place_order(
-        side=OrderSide.BUY, quantity=100, execution_price=D("1400")
+        side=OrderSide.BUY, quantity=100, reference_price=D("1400")
     )
 
     assert result.position.quantity == 100
     assert result.position.average_price == D("1400.0000")
-    assert result.realized_pnl == D("0.00")
+    assert result.gross_pnl == D("0.00")
     assert result.cash_delta == D("-140000.00")
     assert await _cash(session) == D("860000.00")
 
@@ -65,16 +75,16 @@ async def test_long_entry_moves_position_and_debits_cash(engine, session):
 async def test_long_exit_credits_cash_and_realizes_profit(engine, session):
     """BUY 100 @ 1400 then SELL 100 @ 1450 -> flat, +5,000, cash 1,005,000."""
     await engine.place_order(
-        side=OrderSide.BUY, quantity=100, execution_price=D("1400")
+        side=OrderSide.BUY, quantity=100, reference_price=D("1400")
     )
 
     result = await engine.place_order(
-        side=OrderSide.SELL, quantity=100, execution_price=D("1450")
+        side=OrderSide.SELL, quantity=100, reference_price=D("1450")
     )
 
     assert result.position.quantity == 0
     assert result.position.average_price == D("0.0000")
-    assert result.realized_pnl == D("5000.00")
+    assert result.gross_pnl == D("5000.00")
     assert result.position.realized_pnl == D("5000.00")
     assert await _cash(session) == D("1005000.00")
 
@@ -82,30 +92,30 @@ async def test_long_exit_credits_cash_and_realizes_profit(engine, session):
 async def test_partial_long_exit(engine, session):
     """BUY 100 @ 1400, SELL 40 @ 1450 -> +60 @ 1400, +2,000 realized."""
     await engine.place_order(
-        side=OrderSide.BUY, quantity=100, execution_price=D("1400")
+        side=OrderSide.BUY, quantity=100, reference_price=D("1400")
     )
 
     result = await engine.place_order(
-        side=OrderSide.SELL, quantity=40, execution_price=D("1450")
+        side=OrderSide.SELL, quantity=40, reference_price=D("1450")
     )
 
     assert result.position.quantity == 60
     assert result.position.average_price == D("1400.0000")
-    assert result.realized_pnl == D("2000.00")
+    assert result.gross_pnl == D("2000.00")
     # -140,000 then +58,000
     assert await _cash(session) == D("918000.00")
 
 
 async def test_long_exit_at_a_loss(engine, session):
     await engine.place_order(
-        side=OrderSide.BUY, quantity=100, execution_price=D("1400")
+        side=OrderSide.BUY, quantity=100, reference_price=D("1400")
     )
 
     result = await engine.place_order(
-        side=OrderSide.SELL, quantity=100, execution_price=D("1350")
+        side=OrderSide.SELL, quantity=100, reference_price=D("1350")
     )
 
-    assert result.realized_pnl == D("-5000.00")
+    assert result.gross_pnl == D("-5000.00")
     assert await _cash(session) == D("995000.00")
 
 
@@ -117,69 +127,69 @@ async def test_long_exit_at_a_loss(engine, session):
 async def test_short_entry_credits_proceeds(engine, session):
     """SHORT 100 @ 1450 -> -100, cash up 145,000."""
     result = await engine.place_order(
-        side=OrderSide.SHORT_SELL, quantity=100, execution_price=D("1450")
+        side=OrderSide.SHORT_SELL, quantity=100, reference_price=D("1450")
     )
 
     assert result.position.quantity == -100
     assert result.position.average_price == D("1450.0000")
-    assert result.realized_pnl == D("0.00")
+    assert result.gross_pnl == D("0.00")
     assert await _cash(session) == D("1145000.00")
 
 
 async def test_short_cover_realizes_profit(engine, session):
     """SHORT 100 @ 1450 then BUY_TO_COVER 100 @ 1400 -> flat, +5,000."""
     await engine.place_order(
-        side=OrderSide.SHORT_SELL, quantity=100, execution_price=D("1450")
+        side=OrderSide.SHORT_SELL, quantity=100, reference_price=D("1450")
     )
 
     result = await engine.place_order(
-        side=OrderSide.BUY_TO_COVER, quantity=100, execution_price=D("1400")
+        side=OrderSide.BUY_TO_COVER, quantity=100, reference_price=D("1400")
     )
 
     assert result.position.quantity == 0
-    assert result.realized_pnl == D("5000.00")
+    assert result.gross_pnl == D("5000.00")
     assert await _cash(session) == D("1005000.00")
 
 
 async def test_short_cover_at_a_loss(engine, session):
     await engine.place_order(
-        side=OrderSide.SHORT_SELL, quantity=100, execution_price=D("1450")
+        side=OrderSide.SHORT_SELL, quantity=100, reference_price=D("1450")
     )
 
     result = await engine.place_order(
-        side=OrderSide.BUY_TO_COVER, quantity=100, execution_price=D("1500")
+        side=OrderSide.BUY_TO_COVER, quantity=100, reference_price=D("1500")
     )
 
-    assert result.realized_pnl == D("-5000.00")
+    assert result.gross_pnl == D("-5000.00")
     assert await _cash(session) == D("995000.00")
 
 
 async def test_partial_short_cover(engine):
     await engine.place_order(
-        side=OrderSide.SHORT_SELL, quantity=100, execution_price=D("1450")
+        side=OrderSide.SHORT_SELL, quantity=100, reference_price=D("1450")
     )
 
     result = await engine.place_order(
-        side=OrderSide.BUY_TO_COVER, quantity=30, execution_price=D("1400")
+        side=OrderSide.BUY_TO_COVER, quantity=30, reference_price=D("1400")
     )
 
     assert result.position.quantity == -70
     assert result.position.average_price == D("1450.0000")
-    assert result.realized_pnl == D("1500.00")
+    assert result.gross_pnl == D("1500.00")
 
 
 async def test_plain_buy_also_covers_a_short(engine):
     """The specification's example uses BUY, not BUY_TO_COVER, to close."""
     await engine.place_order(
-        side=OrderSide.SHORT_SELL, quantity=100, execution_price=D("1450")
+        side=OrderSide.SHORT_SELL, quantity=100, reference_price=D("1450")
     )
 
     result = await engine.place_order(
-        side=OrderSide.BUY, quantity=100, execution_price=D("1400")
+        side=OrderSide.BUY, quantity=100, reference_price=D("1400")
     )
 
     assert result.position.quantity == 0
-    assert result.realized_pnl == D("5000.00")
+    assert result.gross_pnl == D("5000.00")
 
 
 # --------------------------------------------------------------------------
@@ -190,16 +200,16 @@ async def test_plain_buy_also_covers_a_short(engine):
 async def test_reversal_from_long_to_short(engine, session):
     """+100 @ 1400, then SHORT_SELL 150 @ 1450 -> -50 @ 1450, +5,000."""
     await engine.place_order(
-        side=OrderSide.BUY, quantity=100, execution_price=D("1400")
+        side=OrderSide.BUY, quantity=100, reference_price=D("1400")
     )
 
     result = await engine.place_order(
-        side=OrderSide.SHORT_SELL, quantity=150, execution_price=D("1450")
+        side=OrderSide.SHORT_SELL, quantity=150, reference_price=D("1450")
     )
 
     assert result.position.quantity == -50
     assert result.position.average_price == D("1450.0000")
-    assert result.realized_pnl == D("5000.00")
+    assert result.gross_pnl == D("5000.00")
     # -140,000 then +217,500
     assert await _cash(session) == D("1077500.00")
 
@@ -207,16 +217,16 @@ async def test_reversal_from_long_to_short(engine, session):
 async def test_reversal_from_short_to_long(engine):
     """-100 @ 1450, then BUY 250 @ 1400 -> +150 @ 1400, +5,000."""
     await engine.place_order(
-        side=OrderSide.SHORT_SELL, quantity=100, execution_price=D("1450")
+        side=OrderSide.SHORT_SELL, quantity=100, reference_price=D("1450")
     )
 
     result = await engine.place_order(
-        side=OrderSide.BUY, quantity=250, execution_price=D("1400")
+        side=OrderSide.BUY, quantity=250, reference_price=D("1400")
     )
 
     assert result.position.quantity == 150
     assert result.position.average_price == D("1400.0000")
-    assert result.realized_pnl == D("5000.00")
+    assert result.gross_pnl == D("5000.00")
 
 
 # --------------------------------------------------------------------------
@@ -227,16 +237,16 @@ async def test_reversal_from_short_to_long(engine):
 async def test_realized_pnl_accumulates_across_round_trips(engine, session):
     """The specification's four-order sequence: 5,000 + 5,000."""
     await engine.place_order(
-        side=OrderSide.BUY, quantity=100, execution_price=D("1400")
+        side=OrderSide.BUY, quantity=100, reference_price=D("1400")
     )
     await engine.place_order(
-        side=OrderSide.SELL, quantity=100, execution_price=D("1450")
+        side=OrderSide.SELL, quantity=100, reference_price=D("1450")
     )
     await engine.place_order(
-        side=OrderSide.SHORT_SELL, quantity=100, execution_price=D("1450")
+        side=OrderSide.SHORT_SELL, quantity=100, reference_price=D("1450")
     )
     result = await engine.place_order(
-        side=OrderSide.BUY, quantity=100, execution_price=D("1400")
+        side=OrderSide.BUY, quantity=100, reference_price=D("1400")
     )
 
     assert result.position.quantity == 0
@@ -247,13 +257,13 @@ async def test_realized_pnl_accumulates_across_round_trips(engine, session):
 async def test_realized_pnl_survives_going_flat(engine):
     """Cumulative P&L is a running total, not a property of the open position."""
     await engine.place_order(
-        side=OrderSide.BUY, quantity=10, execution_price=D("100")
+        side=OrderSide.BUY, quantity=10, reference_price=D("100")
     )
     await engine.place_order(
-        side=OrderSide.SELL, quantity=10, execution_price=D("110")
+        side=OrderSide.SELL, quantity=10, reference_price=D("110")
     )
     result = await engine.place_order(
-        side=OrderSide.BUY, quantity=10, execution_price=D("100")
+        side=OrderSide.BUY, quantity=10, reference_price=D("100")
     )
 
     assert result.position.quantity == 10
@@ -262,10 +272,10 @@ async def test_realized_pnl_survives_going_flat(engine):
 
 async def test_trade_rows_carry_the_pnl_of_their_own_fill(engine, session):
     await engine.place_order(
-        side=OrderSide.BUY, quantity=100, execution_price=D("1400")
+        side=OrderSide.BUY, quantity=100, reference_price=D("1400")
     )
     await engine.place_order(
-        side=OrderSide.SELL, quantity=100, execution_price=D("1450")
+        side=OrderSide.SELL, quantity=100, reference_price=D("1450")
     )
 
     trades = (
@@ -273,9 +283,9 @@ async def test_trade_rows_carry_the_pnl_of_their_own_fill(engine, session):
     )
 
     assert len(trades) == 2
-    assert trades[0].realized_pnl == D("0.00"), "the opening fill realizes nothing"
+    assert trades[0].gross_pnl == D("0.00"), "the opening fill realizes nothing"
     assert trades[0].closed_quantity == 0
-    assert trades[1].realized_pnl == D("5000.00")
+    assert trades[1].gross_pnl == D("5000.00")
     assert trades[1].closed_quantity == 100
 
 
@@ -288,14 +298,14 @@ async def test_trade_rows_carry_the_pnl_of_their_own_fill(engine, session):
 async def test_non_positive_quantity_is_rejected(engine, quantity):
     with pytest.raises(InvalidOrderError):
         await engine.place_order(
-            side=OrderSide.BUY, quantity=quantity, execution_price=D("1400")
+            side=OrderSide.BUY, quantity=quantity, reference_price=D("1400")
         )
 
 
 async def test_quantity_beyond_the_bound_is_rejected(engine):
     with pytest.raises(InvalidOrderError):
         await engine.place_order(
-            side=OrderSide.BUY, quantity=10_000_001, execution_price=D("1400")
+            side=OrderSide.BUY, quantity=10_000_001, reference_price=D("1400")
         )
 
 
@@ -303,7 +313,7 @@ async def test_quantity_beyond_the_bound_is_rejected(engine):
 async def test_non_positive_price_is_rejected(engine, price):
     with pytest.raises(InvalidOrderError):
         await engine.place_order(
-            side=OrderSide.BUY, quantity=100, execution_price=D(price)
+            side=OrderSide.BUY, quantity=100, reference_price=D(price)
         )
 
 
@@ -312,7 +322,7 @@ async def test_foreign_symbol_is_rejected(engine):
         await engine.place_order(
             side=OrderSide.BUY,
             quantity=100,
-            execution_price=D("1400"),
+            reference_price=D("1400"),
             symbol="TCS",
         )
 
@@ -321,43 +331,43 @@ async def test_sell_without_a_long_is_rejected(engine):
     """Selling from flat would open a short; that must be stated explicitly."""
     with pytest.raises(InvalidPositionOperationError):
         await engine.place_order(
-            side=OrderSide.SELL, quantity=100, execution_price=D("1450")
+            side=OrderSide.SELL, quantity=100, reference_price=D("1450")
         )
 
 
 async def test_selling_more_than_held_is_rejected(engine):
     await engine.place_order(
-        side=OrderSide.BUY, quantity=100, execution_price=D("1400")
+        side=OrderSide.BUY, quantity=100, reference_price=D("1400")
     )
 
     with pytest.raises(InvalidPositionOperationError):
         await engine.place_order(
-            side=OrderSide.SELL, quantity=150, execution_price=D("1450")
+            side=OrderSide.SELL, quantity=150, reference_price=D("1450")
         )
 
 
 async def test_cover_without_a_short_is_rejected(engine):
     with pytest.raises(InvalidPositionOperationError):
         await engine.place_order(
-            side=OrderSide.BUY_TO_COVER, quantity=100, execution_price=D("1400")
+            side=OrderSide.BUY_TO_COVER, quantity=100, reference_price=D("1400")
         )
 
 
 async def test_covering_more_than_shorted_is_rejected(engine):
     await engine.place_order(
-        side=OrderSide.SHORT_SELL, quantity=100, execution_price=D("1450")
+        side=OrderSide.SHORT_SELL, quantity=100, reference_price=D("1450")
     )
 
     with pytest.raises(InvalidPositionOperationError):
         await engine.place_order(
-            side=OrderSide.BUY_TO_COVER, quantity=150, execution_price=D("1400")
+            side=OrderSide.BUY_TO_COVER, quantity=150, reference_price=D("1400")
         )
 
 
 async def test_order_without_a_wallet_is_rejected(unfunded_engine):
     with pytest.raises(WalletNotFoundError):
         await unfunded_engine.place_order(
-            side=OrderSide.BUY, quantity=1, execution_price=D("1400")
+            side=OrderSide.BUY, quantity=1, reference_price=D("1400")
         )
 
 
@@ -370,14 +380,14 @@ async def test_buy_beyond_the_balance_is_rejected(engine):
     """1,000 @ 1400 = 1,400,000 against a 1,000,000 wallet."""
     with pytest.raises(InsufficientFundsError):
         await engine.place_order(
-            side=OrderSide.BUY, quantity=1000, execution_price=D("1400")
+            side=OrderSide.BUY, quantity=1000, reference_price=D("1400")
         )
 
 
 async def test_a_rejected_order_leaves_cash_and_position_untouched(engine, session):
     with pytest.raises(InsufficientFundsError):
         await engine.place_order(
-            side=OrderSide.BUY, quantity=1000, execution_price=D("1400")
+            side=OrderSide.BUY, quantity=1000, reference_price=D("1400")
         )
 
     assert await _cash(session) == D("1000000.00")
@@ -387,7 +397,7 @@ async def test_a_rejected_order_leaves_cash_and_position_untouched(engine, sessi
 
 async def test_a_buy_for_exactly_the_balance_is_allowed(engine, session):
     result = await engine.place_order(
-        side=OrderSide.BUY, quantity=1000, execution_price=D("1000")
+        side=OrderSide.BUY, quantity=1000, reference_price=D("1000")
     )
 
     assert result.position.quantity == 1000
@@ -397,11 +407,11 @@ async def test_a_buy_for_exactly_the_balance_is_allowed(engine, session):
 async def test_short_proceeds_fund_a_later_buy(engine, session):
     """Cash credited by a short is spendable, per the documented cash model."""
     await engine.place_order(
-        side=OrderSide.SHORT_SELL, quantity=500, execution_price=D("1400")
+        side=OrderSide.SHORT_SELL, quantity=500, reference_price=D("1400")
     )
 
     result = await engine.place_order(
-        side=OrderSide.BUY, quantity=1000, execution_price=D("1400")
+        side=OrderSide.BUY, quantity=1000, reference_price=D("1400")
     )
 
     assert result.position.quantity == 500
@@ -415,7 +425,7 @@ async def test_short_proceeds_fund_a_later_buy(engine, session):
 
 async def test_a_fill_writes_order_trade_and_position(engine, session):
     await engine.place_order(
-        side=OrderSide.BUY, quantity=100, execution_price=D("1400")
+        side=OrderSide.BUY, quantity=100, reference_price=D("1400")
     )
 
     assert (await session.execute(select(func.count(Order.id)))).scalar_one() == 1
@@ -429,7 +439,7 @@ async def test_a_filled_order_records_its_execution_price(engine, session):
     await engine.place_order(
         side=OrderSide.BUY,
         quantity=100,
-        execution_price=D("1400"),
+        reference_price=D("1400"),
         requested_price=D("1399"),
     )
 
@@ -444,7 +454,7 @@ async def test_a_filled_order_records_its_execution_price(engine, session):
 async def test_rejected_orders_are_kept_for_audit(engine, session):
     with pytest.raises(InsufficientFundsError):
         await engine.place_order(
-            side=OrderSide.BUY, quantity=1000, execution_price=D("1400")
+            side=OrderSide.BUY, quantity=1000, reference_price=D("1400")
         )
 
     order = (await session.execute(select(Order))).scalar_one()
@@ -457,7 +467,7 @@ async def test_rejected_orders_are_kept_for_audit(engine, session):
 async def test_a_rejected_order_writes_no_trade(engine, session):
     with pytest.raises(InsufficientFundsError):
         await engine.place_order(
-            side=OrderSide.BUY, quantity=1000, execution_price=D("1400")
+            side=OrderSide.BUY, quantity=1000, reference_price=D("1400")
         )
 
     assert (await session.execute(select(func.count(Trade.id)))).scalar_one() == 0
@@ -474,7 +484,7 @@ async def test_position_and_cash_stay_consistent_across_many_orders(engine, sess
         (OrderSide.BUY_TO_COVER, 80, "1440"),
     ):
         await engine.place_order(
-            side=side, quantity=quantity, execution_price=D(price)
+            side=side, quantity=quantity, reference_price=D(price)
         )
 
     position = (await session.execute(select(Position))).scalar_one()
@@ -491,7 +501,7 @@ async def test_position_and_cash_stay_consistent_across_many_orders(engine, sess
 
 async def test_portfolio_values_an_open_long_at_the_mark_price(engine):
     await engine.place_order(
-        side=OrderSide.BUY, quantity=100, execution_price=D("1400")
+        side=OrderSide.BUY, quantity=100, reference_price=D("1400")
     )
 
     snapshot = await engine.get_portfolio(mark_price=D("1450"))
@@ -505,7 +515,7 @@ async def test_portfolio_values_an_open_long_at_the_mark_price(engine):
 
 async def test_portfolio_values_an_open_short_as_a_liability(engine):
     await engine.place_order(
-        side=OrderSide.SHORT_SELL, quantity=100, execution_price=D("1450")
+        side=OrderSide.SHORT_SELL, quantity=100, reference_price=D("1450")
     )
 
     snapshot = await engine.get_portfolio(mark_price=D("1400"))
@@ -518,7 +528,7 @@ async def test_portfolio_values_an_open_short_as_a_liability(engine):
 
 async def test_portfolio_without_a_mark_price_reports_no_unrealized_pnl(engine):
     await engine.place_order(
-        side=OrderSide.BUY, quantity=100, execution_price=D("1400")
+        side=OrderSide.BUY, quantity=100, reference_price=D("1400")
     )
 
     snapshot = await engine.get_portfolio()
@@ -557,7 +567,7 @@ async def test_a_failure_mid_order_rolls_back_every_table(engine, session, monke
 
     with pytest.raises(RuntimeError, match="database died"):
         await engine.place_order(
-            side=OrderSide.BUY, quantity=100, execution_price=D("1400")
+            side=OrderSide.BUY, quantity=100, reference_price=D("1400")
         )
 
     await session.rollback()
@@ -582,7 +592,7 @@ async def test_a_failure_after_the_position_moves_leaves_no_trace(
 
     with pytest.raises(RuntimeError, match="trade insert failed"):
         await engine.place_order(
-            side=OrderSide.SHORT_SELL, quantity=100, execution_price=D("1450")
+            side=OrderSide.SHORT_SELL, quantity=100, reference_price=D("1450")
         )
 
     await session.rollback()

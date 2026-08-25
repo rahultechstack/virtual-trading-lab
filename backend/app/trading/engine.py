@@ -52,17 +52,27 @@ class OrderResult:
     order: Order
     trade: Trade
     position: Position
-    realized_pnl: Decimal
+    #: P&L from price movement on this fill, before charges.
+    gross_pnl: Decimal
+    #: Charges on this fill.
+    total_charges: Decimal
+    #: gross_pnl minus total_charges.
+    net_pnl: Decimal
+    #: Signed cash movement, charges included.
     cash_delta: Decimal
 
 
 class TradingEngine:
     """Executes orders against the single virtual account."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self, session: AsyncSession, *, execution: ExecutionEngine | None = None
+    ) -> None:
         self._session = session
         self.orders = OrderManager(session)
-        self.execution = ExecutionEngine(session)
+        # Injected so spread, slippage and fee models can be swapped or
+        # switched off without touching the engine.
+        self.execution = execution or ExecutionEngine(session)
         self.positions = PositionManager(session)
         self.portfolio = PortfolioManager(WalletRepository(session))
         self._wallets = WalletRepository(session)
@@ -74,7 +84,7 @@ class TradingEngine:
         *,
         side: OrderSide,
         quantity: int,
-        execution_price: Decimal,
+        reference_price: Decimal,
         symbol: str | None = None,
         requested_price: Decimal | None = None,
     ) -> OrderResult:
@@ -83,8 +93,9 @@ class TradingEngine:
         Args:
             side: BUY, SELL, SHORT_SELL or BUY_TO_COVER.
             quantity: Positive number of shares.
-            execution_price: Price to fill at. Supplied by the caller in this
-                stage; a later stage sources it from live market data.
+            reference_price: Mid price to trade around. The execution price is
+                derived from it by the spread and slippage models, both
+                adverse, so the fill is never better than this.
             symbol: Must be the configured instrument if given.
             requested_price: Recorded for audit; does not affect the fill.
 
@@ -96,7 +107,7 @@ class TradingEngine:
             WalletNotFoundError: the wallet has not been initialised.
         """
         resolved_symbol = self._resolve_symbol(symbol)
-        self._validate_request(quantity, execution_price)
+        self._validate_request(quantity, reference_price)
 
         # Lock both mutable rows before reading anything from them, so a
         # concurrent order cannot interleave between read and write.
@@ -114,7 +125,7 @@ class TradingEngine:
             order_type=OrderType.MARKET,
         )
 
-        fill = self.execution.execute(order, execution_price)
+        fill = self.execution.execute(order, reference_price)
 
         try:
             self._validate_against_position(side, quantity, position)
@@ -134,14 +145,14 @@ class TradingEngine:
             fill_price=fill.price,
         )
 
-        self.positions.apply(position, outcome)
+        self.positions.apply(position, outcome, fill.total_charges)
         self.portfolio.apply_cash(wallet, fill)
         cash_delta = self.portfolio.cash_delta(fill)
 
         trade = await self.execution.record_trade(
             order=order,
             fill=fill,
-            realized_pnl=outcome.realized_pnl,
+            gross_pnl=outcome.realized_pnl,
             closed_quantity=outcome.closed_quantity,
         )
         await self.orders.mark_filled(order, fill.price)
@@ -152,20 +163,26 @@ class TradingEngine:
         await self._session.refresh(trade)
 
         logger.info(
-            "Filled order %s: %s %s @ %s -> position %s, realized %s",
+            "Filled order %s: %s %s ref %s -> exec %s, position %s, "
+            "gross %s, charges %s, net %s",
             order.id,
             side,
             quantity,
+            reference_price,
             fill.price,
             outcome.new_quantity,
             outcome.realized_pnl,
+            fill.total_charges,
+            trade.net_pnl,
         )
 
         return OrderResult(
             order=order,
             trade=trade,
             position=position,
-            realized_pnl=outcome.realized_pnl,
+            gross_pnl=outcome.realized_pnl,
+            total_charges=fill.total_charges,
+            net_pnl=trade.net_pnl,
             cash_delta=cash_delta,
         )
 
@@ -180,6 +197,8 @@ class TradingEngine:
                 quantity=0,
                 average_price=Decimal("0.0000"),
                 realized_pnl=Decimal("0.00"),
+                total_charges=Decimal("0.00"),
+                net_realized_pnl=Decimal("0.00"),
             )
         return position
 
@@ -200,6 +219,8 @@ class TradingEngine:
             quantity=position.quantity,
             average_price=position.average_price,
             realized_pnl=position.realized_pnl,
+            total_charges=position.total_charges,
+            net_realized_pnl=position.net_realized_pnl,
             mark_price=mark_price,
         )
 
@@ -225,16 +246,16 @@ class TradingEngine:
         return settings.TRADING_SYMBOL
 
     @staticmethod
-    def _validate_request(quantity: int, execution_price: Decimal) -> None:
+    def _validate_request(quantity: int, reference_price: Decimal) -> None:
         if quantity <= 0:
             raise InvalidOrderError(f"Quantity must be positive, got {quantity}.")
         if quantity > MAX_ORDER_QUANTITY:
             raise InvalidOrderError(
                 f"Quantity {quantity} exceeds the maximum of {MAX_ORDER_QUANTITY}."
             )
-        if execution_price <= 0:
+        if reference_price <= 0:
             raise InvalidOrderError(
-                f"Execution price must be positive, got {execution_price}."
+                f"Reference price must be positive, got {reference_price}."
             )
 
     @staticmethod

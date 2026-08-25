@@ -154,6 +154,8 @@ class PositionManager:
             quantity=0,
             average_price=Decimal("0.0000"),
             realized_pnl=Decimal("0.00"),
+            total_charges=Decimal("0.00"),
+            net_realized_pnl=Decimal("0.00"),
         )
         self._session.add(position)
         try:
@@ -174,9 +176,22 @@ class PositionManager:
         return result.scalar_one_or_none()
 
     @staticmethod
-    def apply(position: Position, outcome: FillOutcome) -> Position:
-        """Write a fill outcome onto the position row."""
+    def apply(
+        position: Position,
+        outcome: FillOutcome,
+        charges: Decimal = Decimal("0.00"),
+    ) -> Position:
+        """Write a fill outcome onto the position row.
+
+        ``charges`` accumulate on *every* fill, opening ones included, so
+        ``net_realized_pnl`` reflects the full cost of the round trip rather
+        than only the exit leg.
+        """
         position.quantity = outcome.new_quantity
         position.average_price = outcome.new_average_price
         position.realized_pnl = to_money(position.realized_pnl + outcome.realized_pnl)
+        position.total_charges = to_money(position.total_charges + charges)
+        position.net_realized_pnl = to_money(
+            position.realized_pnl - position.total_charges
+        )
         return position

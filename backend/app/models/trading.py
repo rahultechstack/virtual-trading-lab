@@ -117,7 +117,13 @@ class Order(TimestampMixin, Base):
 
 
 class Trade(TimestampMixin, Base):
-    """A fill. One per filled order in Stage 4 (no partial fills yet)."""
+    """A fill, priced end to end.
+
+    Carries what a contract note carries: where it filled, what the quote was,
+    what crossing the spread and slipping cost, every statutory charge, and
+    the resulting gross and net P&L. No partial fills yet -- one trade per
+    filled order.
+    """
 
     __tablename__ = "trades"
     __table_args__ = (
@@ -137,11 +143,58 @@ class Trade(TimestampMixin, Base):
 
     side: Mapped[OrderSide] = mapped_column(_side_enum("order_side"), nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
-    execution_price: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
 
-    #: P&L this fill locked in. Zero for a fill that only opens or adds to a
-    #: position; non-zero only where it closed one. May be negative.
-    realized_pnl: Mapped[Decimal] = mapped_column(
+    #: Where the fill actually happened, after spread and slippage.
+    execution_price: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
+    #: The mid price the caller asked to trade around.
+    reference_price: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    #: The two-sided quote derived from the reference price.
+    bid_price: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    ask_price: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+
+    #: Execution costs already embedded in execution_price, itemised so the
+    #: damage is visible rather than hidden inside the fill price.
+    spread_cost: Mapped[Decimal] = mapped_column(
+        MONEY, nullable=False, default=Decimal("0.00")
+    )
+    slippage_cost: Mapped[Decimal] = mapped_column(
+        MONEY, nullable=False, default=Decimal("0.00")
+    )
+
+    #: Statutory and broker charges, itemised as on a contract note.
+    brokerage: Mapped[Decimal] = mapped_column(
+        MONEY, nullable=False, default=Decimal("0.00")
+    )
+    stt: Mapped[Decimal] = mapped_column(
+        MONEY, nullable=False, default=Decimal("0.00")
+    )
+    exchange_charges: Mapped[Decimal] = mapped_column(
+        MONEY, nullable=False, default=Decimal("0.00")
+    )
+    sebi_charges: Mapped[Decimal] = mapped_column(
+        MONEY, nullable=False, default=Decimal("0.00")
+    )
+    stamp_duty: Mapped[Decimal] = mapped_column(
+        MONEY, nullable=False, default=Decimal("0.00")
+    )
+    gst: Mapped[Decimal] = mapped_column(
+        MONEY, nullable=False, default=Decimal("0.00")
+    )
+    dp_charges: Mapped[Decimal] = mapped_column(
+        MONEY, nullable=False, default=Decimal("0.00")
+    )
+    total_charges: Mapped[Decimal] = mapped_column(
+        MONEY, nullable=False, default=Decimal("0.00")
+    )
+
+    #: P&L from price movement alone, before charges. Zero for a fill that
+    #: only opens or adds to a position. May be negative.
+    gross_pnl: Mapped[Decimal] = mapped_column(
+        MONEY, nullable=False, default=Decimal("0.00")
+    )
+    #: gross_pnl minus this fill's charges. An opening fill has no gross P&L,
+    #: so its net is simply the cost of entering.
+    net_pnl: Mapped[Decimal] = mapped_column(
         MONEY, nullable=False, default=Decimal("0.00")
     )
 
@@ -157,7 +210,8 @@ class Trade(TimestampMixin, Base):
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return (
             f"<Trade id={self.id} order={self.order_id} {self.side} "
-            f"{self.quantity}@{self.execution_price} pnl={self.realized_pnl}>"
+            f"{self.quantity}@{self.execution_price} gross={self.gross_pnl} "
+            f"net={self.net_pnl}>"
         )
 
 
@@ -195,7 +249,16 @@ class Position(TimestampMixin, Base):
     average_price: Mapped[Decimal] = mapped_column(
         AVERAGE, nullable=False, default=Decimal("0.0000")
     )
+    #: Cumulative P&L from price movement, before charges.
     realized_pnl: Mapped[Decimal] = mapped_column(
+        MONEY, nullable=False, default=Decimal("0.00")
+    )
+    #: Cumulative charges paid across every fill, opening ones included.
+    total_charges: Mapped[Decimal] = mapped_column(
+        MONEY, nullable=False, default=Decimal("0.00")
+    )
+    #: realized_pnl minus total_charges -- what the account actually kept.
+    net_realized_pnl: Mapped[Decimal] = mapped_column(
         MONEY, nullable=False, default=Decimal("0.00")
     )
 
@@ -214,5 +277,6 @@ class Position(TimestampMixin, Base):
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return (
             f"<Position {self.symbol} qty={self.quantity} "
-            f"avg={self.average_price} realized={self.realized_pnl}>"
+            f"avg={self.average_price} gross={self.realized_pnl} "
+            f"net={self.net_realized_pnl}>"
         )
