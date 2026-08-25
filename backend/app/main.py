@@ -15,6 +15,10 @@ from app.core.exceptions import DomainError
 from app.core.logging import configure_logging, get_logger
 from app.db.session import dispose_engine
 from app.market_data.registry import close_provider
+from app.analytics.scheduler import (
+    start_snapshot_scheduler,
+    stop_snapshot_scheduler,
+)
 from app.realtime.price_stream import shutdown_price_stream
 
 logger = get_logger(__name__)
@@ -31,8 +35,11 @@ async def lifespan(_: FastAPI):
         settings.TRADING_EXCHANGE,
         settings.TRADING_SYMBOL,
     )
+    start_snapshot_scheduler()
+
     yield
     logger.info("Shutting down.")
+    await stop_snapshot_scheduler()
     await shutdown_price_stream()
     await close_provider()
     await dispose_engine()
@@ -77,8 +84,10 @@ def create_app() -> FastAPI:
             "health": f"{settings.API_V1_PREFIX}/health",
             "wallet": f"{settings.API_V1_PREFIX}/wallet",
             "market_data": f"{settings.API_V1_PREFIX}/market-data",
+            "indicators": f"{settings.API_V1_PREFIX}/indicators",
             "trading": f"{settings.API_V1_PREFIX}/trading",
             "stream": f"{settings.API_V1_PREFIX}/stream/prices",
+            "portfolio_history": f"{settings.API_V1_PREFIX}/portfolio/snapshots",
         }
 
     return app

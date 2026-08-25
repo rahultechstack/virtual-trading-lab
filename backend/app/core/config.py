@@ -71,6 +71,16 @@ class Settings(BaseSettings):
     MARKET_DATA_API_KEY: SecretStr | None = None
     MARKET_DATA_API_SECRET: SecretStr | None = None
 
+    # --- Portfolio snapshots ----------------------------------------------
+    SNAPSHOT_ENABLED: bool = True
+    SNAPSHOT_INTERVAL_SECONDS: float = 300.0
+    # Also snapshot inside each order's transaction, so the equity curve has
+    # an exact point at every moment the account actually changed.
+    SNAPSHOT_ON_TRADE: bool = True
+    # Suppress a periodic row identical to the previous one, so an idle
+    # account does not fill the table overnight.
+    SNAPSHOT_SKIP_UNCHANGED: bool = True
+
     # --- Real-time streaming ----------------------------------------------
     STREAM_POLL_INTERVAL_SECONDS: float = 5.0
     STREAM_MAX_CONNECTIONS: int = 50

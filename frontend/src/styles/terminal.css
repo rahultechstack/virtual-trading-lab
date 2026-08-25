@@ -500,3 +500,280 @@
   background: rgba(46, 168, 106, 0.16);
   color: var(--ok);
 }
+
+/* ==========================================================================
+   Navigation and history pages
+   ========================================================================== */
+
+.shell {
+  min-height: 100vh;
+}
+
+.navbar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 10px 16px 0;
+}
+
+.navbar__brand {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.navbar__tag {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.navbar__links {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+
+.navlink {
+  padding: 7px 12px;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: color 120ms ease;
+}
+
+.navlink:hover {
+  color: var(--text);
+}
+
+.navlink--active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+/* ---- Page shell ---- */
+
+.page {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.page__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.page__title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.page__subtitle {
+  margin: 3px 0 0;
+  font-size: 12px;
+}
+
+.page__actions {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.page .table-scroll {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.table-scroll--tall {
+  max-height: 60vh;
+}
+
+.reason-cell {
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+}
+
+/* ---- Equity curve ---- */
+
+.equity-curve {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.equity-curve__canvas {
+  height: 340px;
+  width: 100%;
+}
+
+.equity-curve__empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  text-align: center;
+  padding: 0 24px;
+}
+
+/* ---- Stat grids ---- */
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.stat__label {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.stat__value {
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-grid--pnl .stat__value {
+  font-size: 24px;
+}
+
+.extremes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 700px) {
+  .equity-curve__canvas {
+    height: 240px;
+  }
+
+  .navbar {
+    gap: 10px;
+  }
+}
+
+/* ==========================================================================
+   Indicators
+   ========================================================================== */
+
+.indicator-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.indicator-bar__label {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.indicator-bar__group {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.chip--indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.chip--active .swatch {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5);
+}
+
+/* ---- Oscillator panes ---- */
+
+.oscillator {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.oscillator__header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.oscillator__label {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.oscillator__note {
+  font-size: 10px;
+}
+
+.oscillator__canvas {
+  height: 130px;
+  width: 100%;
+}
+
+@media (max-width: 700px) {
+  .oscillator__canvas {
+    height: 100px;
+  }
+}

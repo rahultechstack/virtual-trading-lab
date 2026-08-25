@@ -3,12 +3,13 @@
 Single-user, single-instrument **paper trading** platform. No real money, no
 broker connectivity, no login — there is exactly one virtual wallet.
 
-> **Current stage: 7 — Trading terminal.**
-> Stages 1-6 delivered the project structure, the wallet, a
+> **Current stage: 9 — Technical analysis.**
+> Stages 1-8 delivered the project structure, the wallet, a
 > provider-agnostic market-data layer, the trading engine, realistic execution
-> costs and live price streaming. Stage 7 adds the terminal UI: candlestick
-> chart, order entry, wallet, position, orders and trade history. Technical
-> indicators, strategies, ML and backtesting are **not** implemented.
+> costs, live price streaming, the terminal UI and portfolio history. Stage 9
+> adds indicators: SMA, EMA, RSI, MACD, Bollinger Bands and VWAP, computed
+> from real candles and toggled on the chart. Trading signals, strategies, ML
+> and backtesting are **not** implemented.
 
 ## Stack
 
@@ -43,6 +44,8 @@ my-project/
 │       ├── models/        ORM models (Wallet)
 │       ├── schemas/       Pydantic contracts
 │       ├── repositories/  data access — all SQL lives here
+│       ├── analytics/     snapshots + performance summary
+│       ├── indicators/    TA-Lib studies over candle data
 │       ├── market_data/   provider abstraction + integrations
 │       ├── realtime/      WebSocket manager + price stream
 │       ├── trading/       the trading engine (no web, no provider deps)
@@ -57,7 +60,8 @@ my-project/
         ├── hooks/         useLivePrice (WebSocket), useAccount (REST)
         ├── utils/         display formatting
         ├── components/
-        │   └── terminal/  the trading terminal
+        │   ├── terminal/  the trading terminal
+        │   └── history/   trade, order, portfolio and performance pages
         └── styles/
 ```
 
@@ -186,6 +190,8 @@ If port 5432, 8000 or 5173 is already taken, change `POSTGRES_HOST_PORT`,
 | GET    | `/api/v1/market-data/quote`   | Current RELIANCE quote                   |
 | GET    | `/api/v1/market-data/candles` | Historical OHLCV candles                 |
 | GET    | `/api/v1/market-data/provider`| Feed capabilities and limitations        |
+| GET    | `/api/v1/indicators`          | Compute indicators over candles          |
+| GET    | `/api/v1/indicators/catalogue`| Available indicators and their parameters |
 | POST   | `/api/v1/trading/orders`      | Place an order                           |
 | GET    | `/api/v1/trading/execution-cost` | Preview spread, slippage and charges  |
 | GET    | `/api/v1/trading/orders`      | Order history (includes rejections)      |
@@ -194,6 +200,9 @@ If port 5432, 8000 or 5173 is already taken, change `POSTGRES_HOST_PORT`,
 | GET    | `/api/v1/trading/portfolio`   | Cash, position and P&L                   |
 | WS     | `/api/v1/stream/prices`       | Live price stream                        |
 | GET    | `/api/v1/stream/status`       | Stream mode, provider and connections    |
+| GET    | `/api/v1/portfolio/snapshots` | Portfolio history (the equity curve)     |
+| POST   | `/api/v1/portfolio/snapshots` | Capture a snapshot now                   |
+| GET    | `/api/v1/portfolio/performance` | Performance summary                    |
 | GET    | `/docs`                       | Swagger UI                               |
 
 ### Wallet
@@ -800,6 +809,162 @@ Buttons are disabled until there is a live price and a wallet. Rejections --
 insufficient funds, selling more than held -- surface the backend's message
 verbatim.
 
+## Portfolio history
+
+### What persists
+
+Everything. `wallet`, `orders`, `trades`, `positions` and `portfolio_snapshots`
+all live in PostgreSQL on a named Docker volume, so a container teardown does
+not touch them:
+
+```bash
+docker compose down     # containers destroyed, data kept
+docker compose up -d    # everything is exactly where it was
+```
+
+Only `docker compose down -v` deletes the volume.
+
+### Snapshots
+
+`positions` and `wallet` hold the *present* state and nothing else, so
+performance over time needs its own record. `portfolio_snapshots` is
+append-only history -- nothing ever updates a row.
+
+Each snapshot carries the timestamp, cash, position value, total value,
+realized P&L, unrealized P&L and net P&L, plus the mark price it was valued
+at.
+
+They are captured three ways:
+
+| Source     | When                                    | Why                                    |
+| ---------- | --------------------------------------- | -------------------------------------- |
+| `TRADE`    | inside every order's own transaction     | an exact point wherever the account moved |
+| `PERIODIC` | every `SNAPSHOT_INTERVAL_SECONDS`        | fills the gaps as the price moves      |
+| `MANUAL`   | `POST /portfolio/snapshots`              | on demand                              |
+
+The `TRADE` snapshot is written **inside the order transaction**, marked at the
+fill price -- at the instant of a trade that price *is* the market. Because it
+commits with the order, the curve can never record a state that never existed,
+and a rejected order leaves no snapshot at all.
+
+Periodic captures skip a row identical to the previous one, so an idle account
+does not fill the table overnight. They also skip the upstream price call
+entirely when the position is flat -- there is nothing to value.
+
+### Performance summary
+
+Two decisions worth knowing, because they change the numbers:
+
+* **Only closing fills can win or lose.** An opening fill realizes nothing and
+  merely costs its charges; counting those as losses would drag the win rate
+  down meaninglessly. `total_trades` counts every fill, `closing_trades` counts
+  the ones that closed exposure, and win rate is computed over the latter.
+* **A win is judged on net, not gross.** A trade that made money before charges
+  and lost after them is a loss. Judging on gross would report wins that
+  actually cost you money.
+
+`total_charges` includes charges on opening fills, so `total_net_pnl` is what
+the account actually kept.
+
+### Pages
+
+| Route            | Shows                                                     |
+| ---------------- | --------------------------------------------------------- |
+| `#/`             | the trading terminal                                       |
+| `#/trades`       | every fill with its full contract note                     |
+| `#/orders`       | every order including rejections and their reasons         |
+| `#/portfolio`    | the equity curve plus the snapshots behind it              |
+| `#/performance`  | the aggregate summary                                      |
+
+Hash routing rather than a router library: real URLs and working
+back/forward for five static pages, no dependency, no server rewrite rules.
+
+### Configuration
+
+```bash
+SNAPSHOT_ENABLED=true
+SNAPSHOT_INTERVAL_SECONDS=300
+SNAPSHOT_ON_TRADE=true
+SNAPSHOT_SKIP_UNCHANGED=true
+```
+
+## Technical indicators
+
+```
+historical candles  ->  pandas DataFrame  ->  TA-Lib  ->  chart
+```
+
+Six studies, all computed from **real candle data** — the same candles the
+chart draws, so study and price can never disagree.
+
+| Indicator | Spec              | Pane     | Notes                                  |
+| --------- | ----------------- | -------- | -------------------------------------- |
+| SMA       | `sma:20`          | price    | Simple moving average                  |
+| EMA       | `ema:21`          | price    | Exponential moving average             |
+| RSI       | `rsi:14`          | separate | Bounded 0-100                          |
+| MACD      | `macd:12:26:9`    | separate | Line, signal and histogram             |
+| Bollinger | `bbands:20:2`     | price    | Upper, middle and lower                |
+| VWAP      | `vwap:20`         | price    | Session-anchored intraday              |
+
+### Library choice
+
+**TA-Lib**, not pandas-ta. pandas-ta's current builds require Python 3.12 and
+no compatible release exists for the 3.11 runtime here. TA-Lib 0.7 ships the C
+sources in its sdist and builds them at install time, so no system package is
+needed — the image build just takes a few minutes longer.
+
+TA-Lib has no VWAP, so that one is computed here from the typical price
+`(high + low + close) / 3` weighted by volume.
+
+### VWAP anchoring
+
+VWAP resets each session, which only makes sense when a bar is shorter than a
+day. Two modes, chosen from the interval:
+
+* **Intraday** (`1m` to `1h`) — anchored to the trading session, resetting at
+  each new **exchange-local** day. This is the conventional VWAP.
+* **Daily and above** — a rolling window of `period` bars. A session anchor
+  would be meaningless when each bar *is* a session; it would just reproduce
+  every bar's own typical price.
+
+### Warm-up
+
+A moving average that does not exist yet is not drawn. Warm-up bars are
+**omitted** rather than sent as nulls, and each result reports `warmup` (how
+many were skipped) and `insufficient_data` (the window was too short to
+produce anything at all) — so a missing line is explained rather than silently
+absent.
+
+### Requesting them
+
+```bash
+curl "http://localhost:8000/api/v1/indicators?interval=1d&limit=120\
+&indicators=sma:20,ema:21,rsi:14,macd,bbands:20:2,vwap"
+
+curl http://localhost:8000/api/v1/indicators/catalogue
+```
+
+Omitted parameters take their conventional defaults, so `macd` means
+`macd:12:26:9`. Bad parameters are rejected with a reason, including
+cross-parameter rules a range check would miss — `macd:26:12:9` fails because
+fast must be shorter than slow.
+
+### On the chart
+
+Toggle chips above the chart turn each indicator on and off, and the selection
+is remembered across reloads. Overlays (SMA, EMA, Bollinger, VWAP) draw on the
+price pane — envelopes dashed, averages solid. Oscillators (RSI, MACD) get
+their own pane beneath, because they have their own scale and cannot share the
+price axis.
+
+Lightweight Charts v4 has no multi-pane support, so each oscillator is a
+separate chart instance with its time scale **synchronised** to the price
+chart: panning or zooming either drags the others with it.
+
+> **Values only.** Nothing here says buy or sell. Signal generation is a later
+> stage, and there is a test asserting no result field carries a
+> recommendation.
+
 ## Migrations
 
 Alembic runs inside the backend container. Drop `docker compose exec backend`
@@ -840,7 +1005,7 @@ docker compose exec backend pytest tests/test_wallet_persistence.py
 cd backend && pip install -r requirements-dev.txt && pytest
 ```
 
-220 tests.
+304 tests.
 
 * **Wallet** - creation, retrieval, reset, persistence across a simulated
   restart, decimal precision, singleton and non-negative constraints.
@@ -871,6 +1036,17 @@ cd backend && pip install -r requirements-dev.txt && pytest
   delivery, prices actually changing, late joiners, ping/pong, disconnection
   and the connection limit. Drives the ASGI app directly - no server, no
   network.
+* **Portfolio history** (`test_portfolio_history.py`) - snapshot capture and
+  valuation (long, short, flat), duplicate suppression, snapshots written with
+  trades and withheld from rejections, history ordering and filtering, the
+  performance summary (win/loss classification, totals, extremes, profit
+  factor), and persistence of every table across a simulated restart.
+* **Indicators** (`test_indicators.py`) - spec parsing and validation, then
+  each study against a hand-computed value or a defining identity: the EMA
+  recurrence, Bollinger's middle band equalling the SMA, MACD's histogram
+  being the gap between line and signal, RSI pinned to 100 on an unbroken
+  rise, and VWAP restarting at a session boundary. Pure computation - no
+  database, no network.
 
 ## Not in this stage
 

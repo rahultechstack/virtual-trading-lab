@@ -22,6 +22,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -155,51 +156,53 @@ class Trade(TimestampMixin, Base):
     #: Execution costs already embedded in execution_price, itemised so the
     #: damage is visible rather than hidden inside the fill price.
     spread_cost: Mapped[Decimal] = mapped_column(
-        MONEY, nullable=False, default=Decimal("0.00")
+        MONEY, nullable=False, default=Decimal("0.00"), server_default=text("0")
     )
     slippage_cost: Mapped[Decimal] = mapped_column(
-        MONEY, nullable=False, default=Decimal("0.00")
+        MONEY, nullable=False, default=Decimal("0.00"), server_default=text("0")
     )
 
     #: Statutory and broker charges, itemised as on a contract note.
     brokerage: Mapped[Decimal] = mapped_column(
-        MONEY, nullable=False, default=Decimal("0.00")
+        MONEY, nullable=False, default=Decimal("0.00"), server_default=text("0")
     )
     stt: Mapped[Decimal] = mapped_column(
-        MONEY, nullable=False, default=Decimal("0.00")
+        MONEY, nullable=False, default=Decimal("0.00"), server_default=text("0")
     )
     exchange_charges: Mapped[Decimal] = mapped_column(
-        MONEY, nullable=False, default=Decimal("0.00")
+        MONEY, nullable=False, default=Decimal("0.00"), server_default=text("0")
     )
     sebi_charges: Mapped[Decimal] = mapped_column(
-        MONEY, nullable=False, default=Decimal("0.00")
+        MONEY, nullable=False, default=Decimal("0.00"), server_default=text("0")
     )
     stamp_duty: Mapped[Decimal] = mapped_column(
-        MONEY, nullable=False, default=Decimal("0.00")
+        MONEY, nullable=False, default=Decimal("0.00"), server_default=text("0")
     )
     gst: Mapped[Decimal] = mapped_column(
-        MONEY, nullable=False, default=Decimal("0.00")
+        MONEY, nullable=False, default=Decimal("0.00"), server_default=text("0")
     )
     dp_charges: Mapped[Decimal] = mapped_column(
-        MONEY, nullable=False, default=Decimal("0.00")
+        MONEY, nullable=False, default=Decimal("0.00"), server_default=text("0")
     )
     total_charges: Mapped[Decimal] = mapped_column(
-        MONEY, nullable=False, default=Decimal("0.00")
+        MONEY, nullable=False, default=Decimal("0.00"), server_default=text("0")
     )
 
     #: P&L from price movement alone, before charges. Zero for a fill that
     #: only opens or adds to a position. May be negative.
     gross_pnl: Mapped[Decimal] = mapped_column(
-        MONEY, nullable=False, default=Decimal("0.00")
+        MONEY, nullable=False, default=Decimal("0.00"), server_default=text("0")
     )
     #: gross_pnl minus this fill's charges. An opening fill has no gross P&L,
     #: so its net is simply the cost of entering.
     net_pnl: Mapped[Decimal] = mapped_column(
-        MONEY, nullable=False, default=Decimal("0.00")
+        MONEY, nullable=False, default=Decimal("0.00"), server_default=text("0")
     )
 
     #: How much of the fill closed an existing position, for auditability.
-    closed_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    closed_quantity: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
 
     order: Mapped[Order] = relationship(back_populates="trades")
 
@@ -251,15 +254,15 @@ class Position(TimestampMixin, Base):
     )
     #: Cumulative P&L from price movement, before charges.
     realized_pnl: Mapped[Decimal] = mapped_column(
-        MONEY, nullable=False, default=Decimal("0.00")
+        MONEY, nullable=False, default=Decimal("0.00"), server_default=text("0")
     )
     #: Cumulative charges paid across every fill, opening ones included.
     total_charges: Mapped[Decimal] = mapped_column(
-        MONEY, nullable=False, default=Decimal("0.00")
+        MONEY, nullable=False, default=Decimal("0.00"), server_default=text("0")
     )
     #: realized_pnl minus total_charges -- what the account actually kept.
     net_realized_pnl: Mapped[Decimal] = mapped_column(
-        MONEY, nullable=False, default=Decimal("0.00")
+        MONEY, nullable=False, default=Decimal("0.00"), server_default=text("0")
     )
 
     @property

@@ -157,6 +157,19 @@ class TradingEngine:
         )
         await self.orders.mark_filled(order, fill.price)
 
+        # Snapshot inside the same transaction, marked at the fill price: at
+        # the instant of a trade that price *is* the market. Enrolling it here
+        # means the equity curve can never record a state that never existed.
+        if settings.SNAPSHOT_ON_TRADE:
+            from app.analytics.snapshots import SnapshotService
+            from app.models.portfolio_snapshot import SnapshotSource
+
+            await SnapshotService(self._session).capture(
+                mark_price=fill.price,
+                source=SnapshotSource.TRADE,
+                commit=False,
+            )
+
         await self._session.commit()
         await self._session.refresh(order)
         await self._session.refresh(position)
