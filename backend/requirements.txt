@@ -1,0 +1,17 @@
+# ---------------------------------------------------------------------------
+# Stage 1 runtime dependencies ONLY.
+# Market data, indicators, scheduling and analytics libraries are added in the
+# stage that actually uses them (pandas, numpy, pandas-ta, APScheduler, ...).
+# ---------------------------------------------------------------------------
+
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# Settings / validation
+pydantic==2.10.4
+pydantic-settings==2.7.0
+
+# Database
+SQLAlchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0

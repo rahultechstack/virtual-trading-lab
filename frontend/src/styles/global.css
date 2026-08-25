@@ -1,0 +1,149 @@
+:root {
+  --bg: #0f1115;
+  --surface: #171a21;
+  --surface-alt: #1e222b;
+  --border: #2a2f3a;
+  --text: #e6e8ec;
+  --text-muted: #949aa6;
+  --accent: #4c8dff;
+  --ok: #2ea86a;
+  --warn: #d99a2b;
+  --err: #d9534f;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+code {
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 0.9em;
+  background: var(--surface-alt);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.app {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 48px 24px;
+}
+
+.app__header h1 {
+  margin: 0 0 4px;
+  font-size: 26px;
+  letter-spacing: -0.02em;
+}
+
+.app__main {
+  display: grid;
+  gap: 16px;
+  margin-top: 32px;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px 22px;
+}
+
+.card--muted {
+  background: transparent;
+}
+
+.card h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+button {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 14px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 8px 16px;
+  margin: 0;
+}
+
+.kv dt {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.kv dd {
+  margin: 0;
+}
+
+.badge {
+  display: inline-block;
+  border-radius: 4px;
+  padding: 1px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.badge--ok {
+  background: rgba(46, 168, 106, 0.16);
+  color: var(--ok);
+}
+
+.badge--degraded {
+  background: rgba(217, 154, 43, 0.16);
+  color: var(--warn);
+}
+
+.badge--error {
+  background: rgba(217, 83, 79, 0.16);
+  color: var(--err);
+}
+
+.alert {
+  background: rgba(217, 83, 79, 0.1);
+  border: 1px solid rgba(217, 83, 79, 0.35);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.alert p {
+  margin: 6px 0 0;
+}

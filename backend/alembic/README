@@ -1,0 +1,7 @@
+Alembic migration environment.
+
+Stage 1 ships zero migrations on purpose: no domain tables exist yet. The
+environment is wired and verified so the trading-schema stage can start with:
+
+    alembic revision --autogenerate -m "create wallet, orders, positions, trades"
+    alembic upgrade head
