@@ -3,13 +3,13 @@
 Single-user, single-instrument **paper trading** platform. No real money, no
 broker connectivity, no login — there is exactly one virtual wallet.
 
-> **Current stage: 9 — Technical analysis.**
-> Stages 1-8 delivered the project structure, the wallet, a
+> **Current stage: 10 — Strategies and backtesting.**
+> Stages 1-9 delivered the project structure, the wallet, a
 > provider-agnostic market-data layer, the trading engine, realistic execution
-> costs, live price streaming, the terminal UI and portfolio history. Stage 9
-> adds indicators: SMA, EMA, RSI, MACD, Bollinger Bands and VWAP, computed
-> from real candles and toggled on the chart. Trading signals, strategies, ML
-> and backtesting are **not** implemented.
+> costs, live price streaming, the terminal UI, portfolio history and
+> indicators. Stage 10 adds the strategy framework and backtester, running on
+> the live engine's own execution and accounting code. ML is **not**
+> implemented.
 
 ## Stack
 
@@ -45,7 +45,9 @@ my-project/
 │       ├── schemas/       Pydantic contracts
 │       ├── repositories/  data access — all SQL lives here
 │       ├── analytics/     snapshots + performance summary
+│       ├── backtest/      backtest engine, portfolio and metrics
 │       ├── indicators/    TA-Lib studies over candle data
+│       ├── strategies/    Strategy contract + example strategy
 │       ├── market_data/   provider abstraction + integrations
 │       ├── realtime/      WebSocket manager + price stream
 │       ├── trading/       the trading engine (no web, no provider deps)
@@ -192,6 +194,8 @@ If port 5432, 8000 or 5173 is already taken, change `POSTGRES_HOST_PORT`,
 | GET    | `/api/v1/market-data/provider`| Feed capabilities and limitations        |
 | GET    | `/api/v1/indicators`          | Compute indicators over candles          |
 | GET    | `/api/v1/indicators/catalogue`| Available indicators and their parameters |
+| GET    | `/api/v1/strategies`          | Available strategies and their parameters |
+| POST   | `/api/v1/strategies/backtest` | Run a backtest over historical candles   |
 | POST   | `/api/v1/trading/orders`      | Place an order                           |
 | GET    | `/api/v1/trading/execution-cost` | Preview spread, slippage and charges  |
 | GET    | `/api/v1/trading/orders`      | Order history (includes rejections)      |
@@ -965,6 +969,113 @@ chart: panning or zooming either drags the others with it.
 > stage, and there is a test asserting no result field carries a
 > recommendation.
 
+## Strategies and backtesting
+
+```
+candles -> indicators -> strategy -> sizing -> execution -> portfolio -> metrics
+```
+
+### The strategy contract
+
+A `Strategy` sees market data and answers with one of five signals — `BUY`,
+`SELL`, `SHORT`, `COVER`, `HOLD`. It knows nothing about the wallet, the
+database or the web layer, and it does not calculate anything: it *declares*
+the indicators it needs and the engine precomputes them once over the whole
+series.
+
+**No lookahead.** `StrategyContext` exposes the current bar and everything
+before it, and nothing after. Indicator values are read by offset *backwards*,
+and a negative offset raises rather than quietly returning a future bar — the
+single most common way a backtest lies to you.
+
+### Same code as live trading
+
+This is the part that matters. The backtester does not reimplement execution
+or accounting; it calls the live engine's own:
+
+| Concern             | Shared component                              |
+| ------------------- | --------------------------------------------- |
+| Fill pricing        | `ExecutionEngine.price_fill` (spread → slippage → charges) |
+| Position accounting | `apply_fill` — including zero-crossing reversals |
+| Cash rule           | buys debit, sells credit, charges always subtract |
+| P&L                 | `PnLCalculator`                               |
+| Win/loss rules      | closing fills only, judged on **net**          |
+
+Only persistence differs — a backtest keeps state in fields rather than
+writing order, trade, position and snapshot rows per bar.
+
+Two tests hold that claim honest: the same order sequence is run through the
+live database-backed engine and the in-memory backtester, and **cash,
+position, average price, realized P&L, charges and every individual fill price
+must match to the paisa**.
+
+### Fill timing
+
+A signal produced from bar N's close cannot execute at that same close — you
+only learn the close once the bar is over. By default the order fills against
+bar **N+1's open**, the first genuinely tradable price after the decision.
+
+`current_close` is available for comparison. It is lookahead: it assumes a
+price that was not knowable at the moment of the decision. Note it does not
+always *flatter* a run — on a losing strategy it can read worse — but it is
+not a result that could have been achieved, which is the point.
+
+### Position sizing
+
+| Mode                 | Meaning                                     |
+| -------------------- | ------------------------------------------- |
+| `percent_of_equity`  | Default; 95%, leaving room for charges      |
+| `fixed_value`        | A rupee budget per position                 |
+| `fixed_quantity`     | A share count                               |
+
+`BUY` from a short and `SHORT` from a long cross zero in a single order,
+sizing for the existing exposure *plus* the new position — the same reversal
+behaviour the live engine allows.
+
+By default the open position is **closed on the final bar**, so the result is
+realized rather than dominated by paper profit that was never taken.
+
+### Example strategy
+
+One only: `ma_crossover`. Fast SMA crossing above slow goes long; crossing
+below goes short (or flat, with `allow_short: 0`). A *cross* means the
+relationship changed between the previous bar and this one — comparing only
+the current bar would re-fire the same signal on every subsequent bar and turn
+one trade into fifty.
+
+### Running one
+
+```bash
+curl http://localhost:8000/api/v1/strategies
+
+curl -X POST http://localhost:8000/api/v1/strategies/backtest \
+  -H "Content-Type: application/json" -d '{
+    "strategy": "ma_crossover",
+    "params": {"fast": 10, "slow": 30, "allow_short": 1},
+    "interval": "1d",
+    "limit": 400,
+    "initial_capital": "1000000.00"
+  }'
+```
+
+A real run over 251 daily RELIANCE bars:
+
+```
+initial capital  1,000,000.00      total trades      12  (11 closing)
+final equity       902,663.93      winning / losing   3 / 8   win rate 27.27%
+total return       -97,336.07      gross P&L    -93,513.30
+       (-9.73%)                    charges        3,822.77
+                                   net P&L      -97,336.07
+max drawdown  181,551.12 (16.81%)  profit factor  0.38
+avg win / loss  19,805 / -19,583   exposure      84.06%
+```
+
+A simple crossover losing money after costs is the expected result, and
+exactly why the backtester charges what live trading charges.
+
+> **No UI.** The strategy engine is deliberately independent of the frontend,
+> and this stage adds no pages. Drive it from `/docs` or curl.
+
 ## Migrations
 
 Alembic runs inside the backend container. Drop `docker compose exec backend`
@@ -1005,7 +1116,7 @@ docker compose exec backend pytest tests/test_wallet_persistence.py
 cd backend && pip install -r requirements-dev.txt && pytest
 ```
 
-304 tests.
+366 tests.
 
 * **Wallet** - creation, retrieval, reset, persistence across a simulated
   restart, decimal precision, singleton and non-negative constraints.
@@ -1047,6 +1158,12 @@ cd backend && pip install -r requirements-dev.txt && pytest
   being the gap between line and signal, RSI pinned to 100 on an unbroken
   rise, and VWAP restarting at a session boundary. Pure computation - no
   database, no network.
+* **Strategies** (`test_strategies.py`) - signal mapping, lookahead refusal,
+  crossover rules including not re-firing on a trend, and registry validation.
+* **Backtesting** (`test_backtest.py`) - sizing modes, portfolio mechanics,
+  drawdown, fill timing, metrics, and the **parity suite** asserting the live
+  engine and the backtester produce identical cash, position, P&L, charges and
+  fill prices for the same orders.
 
 ## Not in this stage
 

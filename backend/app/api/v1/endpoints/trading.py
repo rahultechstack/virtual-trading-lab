@@ -5,7 +5,6 @@ and back. The engine is usable without them.
 """
 
 from decimal import Decimal
-from types import SimpleNamespace
 from typing import Annotated
 
 from fastapi import APIRouter, Query, status
@@ -140,9 +139,9 @@ async def preview_execution_cost(
     Runs the same spread, slippage and fee models the engine uses, but writes
     nothing -- useful for seeing what an order would actually cost.
     """
-    engine = ExecutionEngine(session)
-    order = SimpleNamespace(side=side, quantity=quantity)
-    fill = engine.execute(order, reference_price)
+    fill = ExecutionEngine(session).price_fill(
+        side=side, quantity=quantity, reference_price=reference_price
+    )
 
     return ExecutionCostPreview(
         side=side,

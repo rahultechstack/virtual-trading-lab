@@ -85,6 +85,7 @@ def create_app() -> FastAPI:
             "wallet": f"{settings.API_V1_PREFIX}/wallet",
             "market_data": f"{settings.API_V1_PREFIX}/market-data",
             "indicators": f"{settings.API_V1_PREFIX}/indicators",
+            "strategies": f"{settings.API_V1_PREFIX}/strategies",
             "trading": f"{settings.API_V1_PREFIX}/trading",
             "stream": f"{settings.API_V1_PREFIX}/stream/prices",
             "portfolio_history": f"{settings.API_V1_PREFIX}/portfolio/snapshots",

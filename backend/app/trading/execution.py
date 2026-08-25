@@ -109,35 +109,46 @@ class ExecutionEngine:
             fees=FeeCalculator.disabled(),
         )
 
-    def execute(self, order: Order, reference_price: Decimal) -> Fill:
-        """Price the fill: spread, then slippage, then charges.
+    def price_fill(
+        self, *, side: OrderSide, quantity: int, reference_price: Decimal
+    ) -> Fill:
+        """Price a fill: spread, then slippage, then charges.
 
-        Pure -- it decides the fill but writes nothing, which keeps it
-        directly testable. Persisting is ``record_trade``'s job.
+        Pure -- it decides the fill but writes nothing and touches no ORM
+        object. That is what lets the backtester price its fills through
+        exactly this code path rather than a parallel implementation.
         """
-        direction = order.side.direction
+        direction = side.direction
 
         spread = self.spread.apply(
-            mid_price=reference_price, direction=direction, quantity=order.quantity
+            mid_price=reference_price, direction=direction, quantity=quantity
         )
         slippage = self.slippage.apply(
-            base_price=spread.fill_price, direction=direction, quantity=order.quantity
+            base_price=spread.fill_price, direction=direction, quantity=quantity
         )
         execution_price = slippage.slipped_price
 
         charges = self.fees.calculate(
-            side=order.side, quantity=order.quantity, price=execution_price
+            side=side, quantity=quantity, price=execution_price
         )
 
         return Fill(
-            quantity=order.quantity,
+            quantity=quantity,
             price=execution_price,
-            side=order.side,
+            side=side,
             reference_price=reference_price,
             quote=spread.quote,
             spread_cost=spread.cost,
             slippage_cost=slippage.cost,
             charges=charges,
+        )
+
+    def execute(self, order: Order, reference_price: Decimal) -> Fill:
+        """Price the fill for a persisted order."""
+        return self.price_fill(
+            side=order.side,
+            quantity=order.quantity,
+            reference_price=reference_price,
         )
 
     async def record_trade(

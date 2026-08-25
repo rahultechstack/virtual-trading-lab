@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
+    backtest,
     health,
     indicators,
     market_data,
@@ -20,3 +21,4 @@ api_router.include_router(indicators.router)
 api_router.include_router(trading.router)
 api_router.include_router(stream.router)
 api_router.include_router(portfolio.router)
+api_router.include_router(backtest.router)
