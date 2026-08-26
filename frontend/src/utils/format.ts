@@ -78,6 +78,53 @@ export function formatDateTime(iso: string | null | undefined): string {
   });
 }
 
+/**
+ * Exchange timezone. NSE and BSE sessions are defined in IST, and the backend
+ * already anchors intraday VWAP to this same zone
+ * (`app/indicators/library.py:SESSION_TIMEZONE`).
+ */
+export const EXCHANGE_TIME_ZONE = 'Asia/Kolkata';
+
+/**
+ * Chart axis label for an epoch-seconds timestamp, in exchange-local time.
+ *
+ * Lightweight Charts renders `UTCTimestamp` values in **UTC** unless a
+ * formatter is supplied, which made a 12:42 IST bar read as 07:12 on the axis.
+ * The timestamps themselves are correct and stay untouched — only the label is
+ * converted, so crosshair readouts, tooltips and the data all stay in step.
+ */
+export function formatChartTick(
+  epochSeconds: number,
+  kind: 'date' | 'time',
+): string {
+  const date = new Date(epochSeconds * 1000);
+  if (kind === 'date') {
+    return date.toLocaleDateString('en-IN', {
+      timeZone: EXCHANGE_TIME_ZONE,
+      day: '2-digit',
+      month: 'short',
+    });
+  }
+  return date.toLocaleTimeString('en-IN', {
+    timeZone: EXCHANGE_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+/** Full crosshair readout for an epoch-seconds timestamp, in exchange-local time. */
+export function formatChartTime(epochSeconds: number): string {
+  return new Date(epochSeconds * 1000).toLocaleString('en-IN', {
+    timeZone: EXCHANGE_TIME_ZONE,
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
 /** `positive` / `negative` / `flat`, for colouring a P&L figure. */
 export function signClass(value: string | number | null | undefined): string {
   const numeric = toNumber(value);

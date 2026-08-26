@@ -8,6 +8,7 @@ import {
 import { useEffect, useMemo, useRef } from 'react';
 
 import type { PortfolioSnapshot } from '@/types/portfolio';
+import { formatChartTick, formatChartTime } from '@/utils/format';
 
 const GRID = '#232833';
 const TEXT = '#949aa6';
@@ -60,7 +61,23 @@ export function EquityCurve({ snapshots, metric }: Props) {
       },
       grid: { vertLines: { color: GRID }, horzLines: { color: GRID } },
       rightPriceScale: { borderColor: GRID },
-      timeScale: { borderColor: GRID, timeVisible: true, secondsVisible: false },
+      timeScale: {
+        borderColor: GRID,
+        timeVisible: true,
+        secondsVisible: false,
+        // Axis labels in exchange-local time. Without this Lightweight
+        // Charts prints UTC, so an IST session reads 5h30m early.
+        // tickMarkType >= 3 is Time / TimeWithSeconds; below that it is a date.
+        tickMarkFormatter: (time: unknown, tickMarkType: number) =>
+          typeof time === 'number'
+            ? formatChartTick(time, tickMarkType >= 3 ? 'time' : 'date')
+            : '',
+      },
+      localization: {
+        // Crosshair / tooltip readout, same timezone as the axis.
+        timeFormatter: (time: unknown) =>
+          typeof time === 'number' ? formatChartTime(time) : '',
+      },
       crosshair: {
         vertLine: { color: TEXT, labelBackgroundColor: '#2a2f3a' },
         horzLine: { color: TEXT, labelBackgroundColor: '#2a2f3a' },
