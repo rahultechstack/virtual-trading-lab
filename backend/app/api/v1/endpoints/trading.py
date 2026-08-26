@@ -92,7 +92,7 @@ async def list_trades(
 
 
 @router.get(
-    "/position", response_model=PositionResponse, summary="Current RELIANCE position"
+    "/position", response_model=PositionResponse, summary="Current position in the configured instrument"
 )
 async def get_position(session: DbSession) -> PositionResponse:
     """``quantity`` carries direction: >0 long, 0 flat, <0 short."""

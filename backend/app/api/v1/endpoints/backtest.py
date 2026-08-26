@@ -32,7 +32,7 @@ async def list_strategies() -> list[StrategySchema]:
 @router.post(
     "/backtest",
     response_model=BacktestResultSchema,
-    summary="Run a backtest over historical RELIANCE candles",
+    summary="Run a backtest over historical candles for the configured instrument",
     responses={
         400: {"description": "Unknown strategy or invalid parameters."},
         503: {"description": "Upstream market-data provider is unavailable."},

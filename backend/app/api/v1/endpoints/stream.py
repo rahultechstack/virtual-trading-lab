@@ -39,7 +39,7 @@ async def stream_status() -> dict:
 
 @router.websocket("/prices")
 async def price_stream(websocket: WebSocket) -> None:
-    """Stream live RELIANCE quotes to one client."""
+    """Stream live quotes for the configured instrument to one client."""
     manager = get_connection_manager()
     service = get_price_stream()
 

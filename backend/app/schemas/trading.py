@@ -36,7 +36,7 @@ class PlaceOrderRequest(BaseModel):
         **_MONEY,
     )
     symbol: str | None = Field(
-        default=None, description="Optional. Must be RELIANCE if supplied."
+        default=None, description="Optional. Must be the configured symbol if supplied."
     )
 
 

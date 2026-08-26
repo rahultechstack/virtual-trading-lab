@@ -1,3 +1,4 @@
+import { DEFAULT_EXCHANGE, DEFAULT_SYMBOL } from '@/config/instrument';
 import type { Portfolio, Position } from '@/types/trading';
 import { formatQuantity, formatRupees, signClass } from '@/utils/format';
 
@@ -50,8 +51,8 @@ export function PositionPanel({ position, portfolio, currentPrice }: Props) {
           <tbody>
             <tr>
               <td>
-                <strong>{position?.symbol ?? 'RELIANCE'}</strong>
-                <span className="muted"> {position?.exchange ?? 'NSE'}</span>
+                <strong>{position?.symbol ?? DEFAULT_SYMBOL}</strong>
+                <span className="muted"> {position?.exchange ?? DEFAULT_EXCHANGE}</span>
               </td>
               <td className={`numeric ${quantity > 0 ? 'positive' : 'negative'}`}>
                 {formatQuantity(quantity)}

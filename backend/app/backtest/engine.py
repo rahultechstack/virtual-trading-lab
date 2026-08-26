@@ -27,6 +27,7 @@ from enum import StrEnum
 
 from app.backtest.portfolio import BacktestPortfolio, InsufficientCash
 from app.backtest.results import BacktestResult, summarise
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.indicators.service import IndicatorService
 from app.models.enums import OrderSide
@@ -133,11 +134,16 @@ class BacktestEngine:
         *,
         strategy: Strategy,
         candles: list[Candle],
-        symbol: str = "RELIANCE",
-        exchange: str = "NSE",
+        symbol: str | None = None,
+        exchange: str | None = None,
         interval: str = "1d",
     ) -> BacktestResult:
         """Run ``strategy`` over ``candles`` and report what happened."""
+        # Fall back to the configured instrument rather than a hard-coded
+        # ticker, so a backtest driven directly (not via the API) still
+        # labels itself correctly after the platform is repointed.
+        symbol = symbol or settings.TRADING_SYMBOL
+        exchange = exchange or settings.TRADING_EXCHANGE
         strategy.reset()
         portfolio = BacktestPortfolio(initial_cash=self.config.initial_capital)
 

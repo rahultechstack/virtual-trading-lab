@@ -80,6 +80,9 @@ services:
       # backend port — not the internal service name.
       VITE_API_BASE_URL: http://localhost:${BACKEND_HOST_PORT:-8000}
       VITE_API_V1_PREFIX: /api/v1
+      # Keep in step with TRADING_SYMBOL / TRADING_EXCHANGE in backend/.env.
+      VITE_TRADING_SYMBOL: ${TRADING_SYMBOL:-RELIANCE}
+      VITE_TRADING_EXCHANGE: ${TRADING_EXCHANGE:-NSE}
       CHOKIDAR_USEPOLLING: "true"
     ports:
       - "${FRONTEND_HOST_PORT:-5173}:5173"

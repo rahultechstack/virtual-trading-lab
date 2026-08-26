@@ -53,9 +53,9 @@ async def get_provider_capabilities(service: ServiceDep) -> ProviderCapabilities
 @router.get(
     "/quote",
     response_model=Quote,
-    summary="Current RELIANCE quote",
+    summary="Current quote for the configured instrument",
     responses={
-        400: {"description": "Symbol other than RELIANCE requested."},
+        400: {"description": "A symbol other than the configured one was requested."},
         503: {"description": "Upstream market-data provider is unavailable."},
     },
 )
@@ -63,10 +63,10 @@ async def get_quote(
     service: ServiceDep,
     symbol: Annotated[
         str | None,
-        Query(description="Optional. Must be RELIANCE if supplied."),
+        Query(description="Optional. Must be the configured symbol if supplied."),
     ] = None,
 ) -> Quote:
-    """Latest traded price for NSE:RELIANCE.
+    """Latest traded price for the configured instrument (see TRADING_SYMBOL).
 
     ``bid`` and ``ask`` are ``null`` when the configured provider carries no
     order-book depth -- see ``GET /market-data/provider``.
@@ -77,7 +77,7 @@ async def get_quote(
 @router.get(
     "/candles",
     response_model=CandleSeries,
-    summary="Historical RELIANCE OHLCV candles",
+    summary="Historical OHLCV candles for the configured instrument",
     responses={
         400: {"description": "Unsupported symbol or interval."},
         503: {"description": "Upstream market-data provider is unavailable."},
@@ -100,7 +100,7 @@ async def get_candles(
         Query(ge=1, le=5000, description="Keep only the most recent N candles."),
     ] = None,
     symbol: Annotated[
-        str | None, Query(description="Optional. Must be RELIANCE if supplied.")
+        str | None, Query(description="Optional. Must be the configured symbol if supplied.")
     ] = None,
 ) -> CandleSeries:
     """OHLCV history, oldest candle first.

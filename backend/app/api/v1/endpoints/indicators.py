@@ -41,7 +41,7 @@ async def catalogue() -> list[IndicatorCatalogueEntry]:
 @router.get(
     "",
     response_model=IndicatorSetResponse,
-    summary="Compute indicators over RELIANCE candles",
+    summary="Compute indicators over the configured instrument's candles",
     responses={
         400: {"description": "Unknown indicator, bad parameters, or bad interval."},
         503: {"description": "Upstream market-data provider is unavailable."},

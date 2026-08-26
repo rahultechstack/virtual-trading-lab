@@ -7,6 +7,7 @@ import { TerminalHeader } from './TerminalHeader';
 import { TradeHistory } from './TradeHistory';
 import { TradingPanel } from './TradingPanel';
 import { WalletPanel } from './WalletPanel';
+import { DEFAULT_EXCHANGE, DEFAULT_SYMBOL } from '@/config/instrument';
 import { useAccount } from '@/hooks/useAccount';
 import { useLivePrice } from '@/hooks/useLivePrice';
 
@@ -76,8 +77,8 @@ export function Terminal() {
       <div className="terminal__body">
         <div className="terminal__main">
           <PriceChart
-            symbol={tick?.symbol ?? 'RELIANCE'}
-            exchange={tick?.exchange ?? 'NSE'}
+            symbol={tick?.symbol ?? DEFAULT_SYMBOL}
+            exchange={tick?.exchange ?? DEFAULT_EXCHANGE}
             tick={tick}
           />
 

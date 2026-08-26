@@ -1,3 +1,4 @@
+import { DEFAULT_EXCHANGE, DEFAULT_SYMBOL } from '@/config/instrument';
 import { formatPercent, formatRupees, signClass } from '@/utils/format';
 import type { ConnectionState, PriceTick, StreamStatus } from '@/types/stream';
 
@@ -38,8 +39,8 @@ export function TerminalHeader({
     <header className="terminal__header">
       <div className="instrument">
         <div className="instrument__id">
-          <span className="instrument__symbol">{tick?.symbol ?? 'RELIANCE'}</span>
-          <span className="instrument__exchange">{tick?.exchange ?? 'NSE'}</span>
+          <span className="instrument__symbol">{tick?.symbol ?? DEFAULT_SYMBOL}</span>
+          <span className="instrument__exchange">{tick?.exchange ?? DEFAULT_EXCHANGE}</span>
         </div>
 
         <div className="instrument__price">

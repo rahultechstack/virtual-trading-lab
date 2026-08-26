@@ -1,9 +1,9 @@
-"""RELIANCE market-data service.
+"""Market-data service for the single configured instrument.
 
 Sits between the API and whatever provider is configured. It owns the rules
 that are true of *this platform* rather than of any feed:
 
-* exactly one tradable instrument, NSE:RELIANCE;
+* exactly one tradable instrument, set by TRADING_SYMBOL / TRADING_EXCHANGE;
 * the interval requested must be one the configured provider actually serves;
 * results are wrapped in the platform's own response models.
 
@@ -74,7 +74,7 @@ class RelianceMarketDataService:
     # -- reads -----------------------------------------------------------
 
     async def get_current_quote(self, symbol: str | None = None) -> Quote:
-        """Latest quote for RELIANCE.
+        """Latest quote for the configured instrument.
 
         ``bid`` and ``ask`` may be ``None``: not every feed carries order-book
         depth. Check ``capabilities.supports_bid_ask`` before relying on them.
@@ -90,7 +90,7 @@ class RelianceMarketDataService:
         limit: int | None = None,
         symbol: str | None = None,
     ) -> CandleSeries:
-        """OHLCV history for RELIANCE, oldest candle first."""
+        """OHLCV history for the configured instrument, oldest candle first."""
         resolved = self._require_supported_symbol(symbol)
         self._require_supported_interval(interval)
 
