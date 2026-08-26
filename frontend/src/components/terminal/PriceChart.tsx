@@ -410,8 +410,6 @@ export function PriceChart({ symbol, exchange, tick }: Props) {
       ))}
 
       <footer className="chart__footer muted">
-        <StatusClock tick={tick} />
-
         {error ? (
           <span className="negative">{error}</span>
         ) : loading ? (
@@ -426,6 +424,8 @@ export function PriceChart({ symbol, exchange, tick }: Props) {
             )}
           </span>
         )}
+
+        <StatusClock tick={tick} />
       </footer>
     </section>
   );

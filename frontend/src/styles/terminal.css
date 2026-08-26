@@ -778,45 +778,128 @@
   }
 }
 
-/* --- Status clock (chart footer) ---------------------------------------- */
+/* --- Status clock (right of the chart footer) ---------------------------- */
 .chart__footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
 }
 
+/* Pushes the clock to the right edge whatever the left content is. */
 .status-clock {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 11px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  line-height: 1.25;
+}
+
+.status-clock__block {
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
 .status-clock__date {
   color: var(--text-muted);
+  font-size: 11px;
+  letter-spacing: 0.2px;
 }
 
 .status-clock__time {
   color: var(--text);
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.2px;
+  letter-spacing: 0.4px;
 }
 
-.status-clock__sep,
-.status-clock__label,
-.status-clock__age {
+.status-clock__divider {
+  width: 1px;
+  height: 15px;
+  background: var(--border);
+}
+
+.status-clock__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   color: var(--text-muted);
+  font-size: 11px;
 }
 
 .status-clock__stamp {
-  color: var(--accent);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  color: var(--text);
+  font-size: 12px;
   font-weight: 600;
 }
 
+.status-clock__stamp--idle {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.status-clock__age {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 400;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(148, 154, 166, 0.12);
+}
+
+/* Feed indicator: green when fresh, amber once the tick ages, grey when
+   nothing has arrived yet. */
+.status-clock__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.status-clock__dot--live {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px rgba(46, 168, 106, 0.16);
+  animation: status-clock-pulse 2.4s ease-in-out infinite;
+}
+
+.status-clock__dot--stale {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px rgba(217, 154, 43, 0.16);
+}
+
+.status-clock__dot--idle {
+  background: var(--text-muted);
+  box-shadow: 0 0 0 3px rgba(148, 154, 166, 0.12);
+}
+
+@keyframes status-clock-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-clock__dot--live {
+    animation: none;
+  }
+}
+
 @media (max-width: 720px) {
+  .status-clock {
+    margin-left: 0;
+    width: 100%;
+    justify-content: space-between;
+  }
   .status-clock__age {
     display: none;
   }
