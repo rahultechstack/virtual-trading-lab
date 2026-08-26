@@ -4,20 +4,19 @@ import type { PriceTick } from '@/types/stream';
 import { formatClockDate, formatClockTime } from '@/utils/format';
 
 interface Props {
-  /** Latest tick, used for the "last price update" line. */
+  /** Latest tick, used for the "updated" stamp. */
   tick: PriceTick | null;
 }
 
 /**
- * Fixed bottom-right status clock.
+ * Compact date/time readout for the chart footer.
  *
- * Two lines: the wall clock, and when the backend last fetched a price.
- * Both are rendered in exchange-local time (IST), matching the chart axis, so
- * every time shown anywhere in the app refers to the same zone.
+ * Rendered in exchange-local time (IST), matching the chart axis, so every
+ * time shown in the app refers to the same zone.
  *
- * `tick.server_time` is when the *backend* built the tick — i.e. the moment it
+ * `tick.server_time` is when the *backend* built the tick — the moment it
  * actually pulled from the provider. That is the honest "last fetch" figure;
- * `tick.timestamp` is the exchange's own stamp and runs ~13s behind it.
+ * `tick.timestamp` is the exchange's own stamp and runs behind it.
  */
 export function StatusClock({ tick }: Props) {
   const [now, setNow] = useState<Date>(() => new Date());
@@ -34,25 +33,23 @@ export function StatusClock({ tick }: Props) {
     : null;
 
   return (
-    <aside className="status-clock" aria-live="off">
-      <div className="status-clock__now">
-        <span className="status-clock__date">{formatClockDate(now)}</span>
-        <span className="status-clock__time">{formatClockTime(now)}</span>
-      </div>
+    <span className="status-clock">
+      <span className="status-clock__date">{formatClockDate(now)}</span>
+      <span className="status-clock__time">{formatClockTime(now)}</span>
 
-      <div className="status-clock__update">
-        <span className="status-clock__label">Last price update</span>
-        {valid ? (
-          <>
-            <span className="status-clock__stamp">{formatClockTime(fetchedAt)}</span>
-            {ageSeconds !== null && (
-              <span className="status-clock__age">{ageSeconds}s ago</span>
-            )}
-          </>
-        ) : (
-          <span className="status-clock__stamp muted">waiting…</span>
-        )}
-      </div>
-    </aside>
+      <span className="status-clock__sep">·</span>
+
+      <span className="status-clock__label">updated</span>
+      {valid ? (
+        <>
+          <span className="status-clock__stamp">{formatClockTime(fetchedAt)}</span>
+          {ageSeconds !== null && (
+            <span className="status-clock__age">({ageSeconds}s ago)</span>
+          )}
+        </>
+      ) : (
+        <span className="status-clock__stamp">waiting…</span>
+      )}
+    </span>
   );
 }

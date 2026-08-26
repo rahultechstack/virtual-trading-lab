@@ -778,54 +778,36 @@
   }
 }
 
-/* --- Status clock -------------------------------------------------------- */
-/* Fixed to the viewport, bottom right: wall clock plus when the backend last
-   fetched a price. Both in IST, matching the chart axis. */
-.status-clock {
-  position: fixed;
-  right: 16px;
-  bottom: 16px;
-  z-index: 40;
+/* --- Status clock (chart footer) ---------------------------------------- */
+.chart__footer {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px 12px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
-.status-clock__now {
-  display: flex;
+.status-clock {
+  display: inline-flex;
   align-items: baseline;
-  gap: 8px;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .status-clock__date {
   color: var(--text-muted);
-  font-size: 12px;
 }
 
 .status-clock__time {
   color: var(--text);
-  font-size: 16px;
   font-weight: 600;
-  letter-spacing: 0.3px;
+  letter-spacing: 0.2px;
 }
 
-.status-clock__update {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding-top: 4px;
-  border-top: 1px solid var(--border);
-  font-size: 11px;
-}
-
-.status-clock__label {
+.status-clock__sep,
+.status-clock__label,
+.status-clock__age {
   color: var(--text-muted);
 }
 
@@ -834,17 +816,8 @@
   font-weight: 600;
 }
 
-.status-clock__age {
-  color: var(--text-muted);
-}
-
 @media (max-width: 720px) {
-  .status-clock {
-    right: 8px;
-    bottom: 8px;
-    padding: 6px 9px;
-  }
-  .status-clock__time {
-    font-size: 14px;
+  .status-clock__age {
+    display: none;
   }
 }

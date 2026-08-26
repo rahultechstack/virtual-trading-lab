@@ -10,6 +10,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { OscillatorPane } from './OscillatorPane';
+import { StatusClock } from '@/components/StatusClock';
 import { fetchCandles } from '@/api/marketData';
 import { useIndicators } from '@/hooks/useIndicators';
 import { formatChartTick, formatChartTime } from '@/utils/format';
@@ -409,6 +410,8 @@ export function PriceChart({ symbol, exchange, tick }: Props) {
       ))}
 
       <footer className="chart__footer muted">
+        <StatusClock tick={tick} />
+
         {error ? (
           <span className="negative">{error}</span>
         ) : loading ? (
