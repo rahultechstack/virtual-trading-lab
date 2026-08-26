@@ -7,6 +7,7 @@ import { TerminalHeader } from './TerminalHeader';
 import { TradeHistory } from './TradeHistory';
 import { TradingPanel } from './TradingPanel';
 import { WalletPanel } from './WalletPanel';
+import { StatusClock } from '@/components/StatusClock';
 import { DEFAULT_EXCHANGE, DEFAULT_SYMBOL } from '@/config/instrument';
 import { useAccount } from '@/hooks/useAccount';
 import { useLivePrice } from '@/hooks/useLivePrice';
@@ -145,6 +146,8 @@ export function Terminal() {
           />
         </aside>
       </div>
+
+      <StatusClock tick={tick} />
 
       <footer className="terminal__footer muted">
         Paper trading only · virtual money · no orders reach any exchange

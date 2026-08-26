@@ -125,6 +125,27 @@ export function formatChartTime(epochSeconds: number): string {
   });
 }
 
+/** Date as `dd/mm/yyyy`, in exchange-local time. */
+export function formatClockDate(date: Date): string {
+  return date.toLocaleDateString('en-GB', {
+    timeZone: EXCHANGE_TIME_ZONE,
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+}
+
+/** Time as `hh:mm:ss AM/PM`, in exchange-local time. */
+export function formatClockTime(date: Date): string {
+  return date.toLocaleTimeString('en-US', {
+    timeZone: EXCHANGE_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  });
+}
+
 /** `positive` / `negative` / `flat`, for colouring a P&L figure. */
 export function signClass(value: string | number | null | undefined): string {
   const numeric = toNumber(value);
