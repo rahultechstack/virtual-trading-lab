@@ -85,10 +85,34 @@ class PriceStreamService:
         self._push_task: asyncio.Task | None = None
         self._running = False
 
-        self.last_tick: dict[str, Any] | None = None
+        #: symbol -> most recent tick payload, so a client subscribing to an
+        #: instrument can be shown a price immediately.
+        self.last_ticks: dict[str, dict[str, Any]] = {}
         self.last_error: str | None = None
         self.tick_count = 0
         self.error_count = 0
+
+    @property
+    def last_tick(self) -> dict[str, Any] | None:
+        """Most recent tick for the default instrument.
+
+        Kept as a property so existing callers -- the snapshot scheduler and the
+        stop-loss reference price among them -- keep working now that the
+        stream carries several instruments at once.
+        """
+        return self.last_ticks.get(self._symbol.upper())
+
+    def last_tick_for(self, symbol: str) -> dict[str, Any] | None:
+        return self.last_ticks.get(symbol.upper())
+
+    def symbols_to_poll(self) -> list[str]:
+        """Which instruments to fetch this cycle.
+
+        Exactly what clients asked for; the default instrument only when nobody
+        has subscribed to anything, which keeps a bare client working.
+        """
+        subscribed = self._manager.subscribed_symbols()
+        return sorted(subscribed) if subscribed else [self._symbol.upper()]
 
     # -- introspection ---------------------------------------------------
 
@@ -113,6 +137,7 @@ class PriceStreamService:
             "is_mock": capabilities.is_mock,
             "is_delayed": capabilities.is_delayed,
             "symbol": self._symbol,
+            "subscribed_symbols": sorted(self._manager.subscribed_symbols()),
             "exchange": self._exchange,
             "poll_interval_seconds": self._poll_interval,
             "connections": self._manager.connection_count,
@@ -207,34 +232,44 @@ class PriceStreamService:
                 backoff = min(backoff * 2, 30.0)
 
     async def _poll_once(self) -> None:
-        """One scheduled poll. Never raises -- the scheduler must keep going."""
+        """One scheduled poll. Never raises -- the scheduler must keep going.
+
+        Polls every subscribed instrument. One symbol failing does not stop the
+        others: each is fetched and reported independently.
+        """
         if not self._manager.has_listeners:
             # Nobody is listening; do not spend rate limit.
             return
-        try:
-            quote = await self._provider.get_current_quote(
-                self._symbol, self._exchange
-            )
-        except MarketDataError as exc:
-            await self._handle_failure(exc)
-            return
-        except Exception as exc:  # noqa: BLE001 - defensive
-            await self._handle_failure(exc)
-            return
 
-        await self._broadcast_quote(quote)
+        from app.market_data.instruments import instrument_registry
+
+        for symbol in self.symbols_to_poll():
+            instrument = instrument_registry.get(symbol)
+            exchange = instrument.exchange if instrument else self._exchange
+            try:
+                quote = await self._provider.get_current_quote(symbol, exchange)
+            except MarketDataError as exc:
+                await self._handle_failure(exc, symbol=symbol)
+                continue
+            except Exception as exc:  # noqa: BLE001 - defensive
+                await self._handle_failure(exc, symbol=symbol)
+                continue
+
+            await self._broadcast_quote(quote)
 
     # -- broadcasting ----------------------------------------------------
 
     async def _broadcast_quote(self, quote: Quote) -> None:
         payload = self.build_tick(quote)
-        self.last_tick = payload
+        symbol = quote.symbol.upper()
+        self.last_ticks[symbol] = payload
         self.tick_count += 1
         self.last_error = None
-        await self._manager.broadcast(payload)
-        await self._run_automation(quote.last_price)
+        # Routed by symbol, so a client watching TCS is not sent INFY ticks.
+        await self._manager.broadcast(payload, symbol=symbol)
+        await self._run_automation(quote.last_price, symbol=symbol)
 
-    async def _run_automation(self, market_price: Decimal) -> None:
+    async def _run_automation(self, market_price: Decimal, *, symbol: str) -> None:
         """Let the automatic-order monitor act on this price.
 
         Runs after the tick is broadcast so the chart is never held up by
@@ -247,28 +282,30 @@ class PriceStreamService:
 
         try:
             events = await get_automatic_order_monitor().on_price(
-                market_price=market_price, symbol=self._symbol
+                market_price=market_price, symbol=symbol
             )
         except Exception as exc:  # noqa: BLE001 - the stream must survive
             logger.warning("Automatic order monitor error: %s", exc)
             return
 
         for event in events:
-            await self._manager.broadcast(event)
+            await self._manager.broadcast(event, symbol=symbol)
 
-    async def _handle_failure(self, exc: Exception) -> None:
+    async def _handle_failure(self, exc: Exception, *, symbol: str | None = None) -> None:
         self.error_count += 1
         self.last_error = f"{type(exc).__name__}: {exc}"
-        logger.warning("Price stream error: %s", self.last_error)
+        logger.warning("Price stream error (%s): %s", symbol or "-", self.last_error)
         await self._manager.broadcast(
             {
                 "type": "error",
                 "data": {
                     "message": "Upstream market data is unavailable.",
                     "detail": self.last_error,
+                    "symbol": symbol,
                     "timestamp": datetime.now(tz=UTC).isoformat(),
                 },
-            }
+            },
+            symbol=symbol,
         )
 
     def build_tick(self, quote: Quote) -> dict[str, Any]:

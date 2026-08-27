@@ -10,7 +10,9 @@ from typing import Annotated
 from fastapi import APIRouter, Query, status
 
 from app.api.deps import DbSession
+from app.core.exceptions import InvalidOrderError
 from app.models.enums import OrderSide, OrderStatus
+from app.market_data.instruments import resolve_symbol
 from app.schemas.trading import (
     ChargesResponse,
     ExecutionCostPreview,
@@ -18,13 +20,47 @@ from app.schemas.trading import (
     OrderResultResponse,
     PlaceOrderRequest,
     PortfolioResponse,
+    PortfolioSummaryResponse,
     PositionResponse,
+    PositionValuationResponse,
     TradeResponse,
 )
 from app.trading.engine import TradingEngine
 from app.trading.execution import ExecutionEngine
 
 router = APIRouter(prefix="/trading", tags=["trading"])
+
+
+def _parse_marks(marks: str | None) -> dict[Decimal, Decimal] | dict[str, Decimal]:
+    """Parse ``SYMBOL:PRICE,SYMBOL:PRICE`` into a mark-price map.
+
+    A query string is used rather than a body because this is a GET; the format
+    is deliberately trivial so it stays readable in a URL.
+    """
+    if not marks or not marks.strip():
+        return {}
+
+    parsed: dict[str, Decimal] = {}
+    for entry in marks.split(","):
+        if not entry.strip():
+            continue
+        symbol, separator, raw_price = entry.partition(":")
+        if not separator:
+            raise InvalidOrderError(
+                f"Malformed mark '{entry.strip()}'. Expected SYMBOL:PRICE."
+            )
+        try:
+            price = Decimal(raw_price.strip())
+        except ArithmeticError:
+            raise InvalidOrderError(
+                f"Malformed price in '{entry.strip()}'."
+            ) from None
+        if price <= 0:
+            raise InvalidOrderError(f"Mark price for {symbol.strip()} must be positive.")
+        # Resolving here means an unsupported symbol is rejected up front.
+        parsed[resolve_symbol(symbol.strip())] = price
+    return parsed
+
 
 
 @router.post(
@@ -94,10 +130,69 @@ async def list_trades(
 @router.get(
     "/position", response_model=PositionResponse, summary="Current position in the configured instrument"
 )
-async def get_position(session: DbSession) -> PositionResponse:
+async def get_position(
+    session: DbSession,
+    symbol: Annotated[
+        str | None, Query(description="Defaults to the configured instrument.")
+    ] = None,
+) -> PositionResponse:
     """``quantity`` carries direction: >0 long, 0 flat, <0 short."""
-    position = await TradingEngine(session).get_position()
+    position = await TradingEngine(session).get_position(symbol)
     return PositionResponse.model_validate(position)
+
+
+@router.get(
+    "/positions",
+    response_model=list[PositionResponse],
+    summary="Every instrument that has ever traded",
+)
+async def list_positions(session: DbSession) -> list[PositionResponse]:
+    """All positions, alphabetically. Includes flat rows with realized history."""
+    positions = await TradingEngine(session).list_positions()
+    return [PositionResponse.model_validate(position) for position in positions]
+
+
+@router.get(
+    "/portfolio/summary",
+    response_model=PortfolioSummaryResponse,
+    summary="Whole-account valuation across every instrument",
+    responses={
+        400: {"description": "Malformed marks, or an unsupported symbol in them."},
+        404: {"description": "Wallet has not been initialised."},
+    },
+)
+async def get_portfolio_summary(
+    session: DbSession,
+    marks: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Mark prices as SYMBOL:PRICE pairs, comma separated, e.g. "
+                "RELIANCE:1400.00,TCS:3200.50. An open position with no mark is "
+                "reported unvalued rather than guessed at."
+            )
+        ),
+    ] = None,
+) -> PortfolioSummaryResponse:
+    """One wallet, many stocks.
+
+    Cash, position value and every P&L figure are summed across all instruments,
+    with a per-instrument breakdown in ``positions``.
+    """
+    valuation = await TradingEngine(session).get_portfolio_summary(
+        mark_prices=_parse_marks(marks)
+    )
+    return PortfolioSummaryResponse(
+        **{
+            key: value
+            for key, value in vars(valuation).items()
+            if key != "positions"
+        },
+        positions=[
+            PositionValuationResponse.model_validate(position)
+            for position in valuation.positions
+        ],
+    )
 
 
 @router.get(
@@ -112,6 +207,9 @@ async def get_portfolio(
         Decimal | None,
         Query(gt=0, description="Price to value the open position at."),
     ] = None,
+    symbol: Annotated[
+        str | None, Query(description="Defaults to the configured instrument.")
+    ] = None,
 ) -> PortfolioResponse:
     """Cash, position and P&L.
 
@@ -119,7 +217,9 @@ async def get_portfolio(
     fetch prices itself, which is what keeps it independent of the market-data
     layer. Without it, unrealized P&L and position value report zero.
     """
-    snapshot = await TradingEngine(session).get_portfolio(mark_price=mark_price)
+    snapshot = await TradingEngine(session).get_portfolio(
+        mark_price=mark_price, symbol=symbol
+    )
     return PortfolioResponse(**vars(snapshot))
 
 

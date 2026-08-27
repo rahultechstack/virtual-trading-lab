@@ -8,6 +8,7 @@ import type {
   StreamError,
   StreamMessage,
   StreamStatus,
+  StreamSubscription,
 } from '@/types/stream';
 
 /** Reconnect backoff: doubles from 1s, capped, with jitter. */
@@ -35,6 +36,8 @@ interface UseLivePriceResult {
   attempt: number;
   /** True when the last tick is older than the staleness threshold. */
   isStale: boolean;
+  /** Which instrument the server confirmed this socket is watching. */
+  subscription: StreamSubscription | null;
   /** Force an immediate reconnect. */
   reconnect: () => void;
 }
@@ -47,10 +50,18 @@ interface UseLivePriceResult {
  * not require a page refresh and a fleet of clients does not stampede on
  * recovery.
  */
-export function useLivePrice(): UseLivePriceResult {
+/**
+ * @param symbol Instrument to watch. Changing it re-subscribes on the SAME
+ *   socket -- no reconnect, no second connection. Passing null keeps the
+ *   server's default instrument.
+ */
+export function useLivePrice(symbol?: string | null): UseLivePriceResult {
   const [tick, setTick] = useState<PriceTick | null>(null);
   const [automaticOrderEvent, setAutomaticOrderEvent] =
     useState<AutomaticOrderEvent | null>(null);
+  const [subscription, setSubscription] = useState<StreamSubscription | null>(
+    null,
+  );
   const [status, setStatus] = useState<StreamStatus | null>(null);
   const [error, setError] = useState<StreamError | null>(null);
   const [connection, setConnection] = useState<ConnectionState>('connecting');
@@ -64,6 +75,10 @@ export function useLivePrice(): UseLivePriceResult {
   const lastTickAtRef = useRef<number | null>(null);
   // Guards against a reconnect being scheduled after the hook unmounts.
   const activeRef = useRef(true);
+  // Read inside socket callbacks, which must not be rebuilt on every
+  // symbol change -- that would tear the connection down.
+  const symbolRef = useRef<string | null>(symbol ?? null);
+  symbolRef.current = symbol ?? null;
 
   const clearTimers = useCallback(() => {
     if (retryTimerRef.current !== null) {
@@ -103,6 +118,14 @@ export function useLivePrice(): UseLivePriceResult {
       setConnection('live');
       setError(null);
 
+      // Tell the server which instrument this client wants. The server
+      // validates it and replies with a `subscription` frame.
+      if (symbolRef.current) {
+        socket.send(
+          JSON.stringify({ type: 'subscribe', symbol: symbolRef.current }),
+        );
+      }
+
       pingTimerRef.current = window.setInterval(() => {
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: 'ping' }));
@@ -121,11 +144,19 @@ export function useLivePrice(): UseLivePriceResult {
       }
 
       switch (message.type) {
-        case 'tick':
+        case 'tick': {
+          // Guard against a tick for the previous instrument arriving
+          // in the gap between switching and the server acknowledging.
+          const wanted = symbolRef.current;
+          if (wanted && message.data.symbol !== wanted) break;
           setTick(message.data);
           setError(null);
           lastTickAtRef.current = Date.now();
           setIsStale(false);
+          break;
+        }
+        case 'subscription':
+          setSubscription(message.data);
           break;
         case 'status':
           setStatus(message.data);
@@ -183,6 +214,15 @@ export function useLivePrice(): UseLivePriceResult {
     };
   }, [connect, clearTimers]);
 
+  // Switching instruments re-subscribes on the open socket. Reconnecting
+  // would drop and redial for no reason, and would race the backoff timer.
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!symbol || !socket || socket.readyState !== WebSocket.OPEN) return;
+    setTick(null);
+    socket.send(JSON.stringify({ type: 'subscribe', symbol }));
+  }, [symbol]);
+
   // Mark the price stale if nothing arrives for a while. The socket can stay
   // open while the upstream feed has quietly stopped producing.
   useEffect(() => {
@@ -196,6 +236,7 @@ export function useLivePrice(): UseLivePriceResult {
   return {
     tick,
     automaticOrderEvent,
+    subscription,
     status,
     error,
     connection,

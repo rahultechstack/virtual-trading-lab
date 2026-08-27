@@ -23,6 +23,7 @@ never debit cash without moving the position, or vice versa.
 from dataclasses import dataclass
 from decimal import Decimal
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -34,12 +35,18 @@ from app.core.exceptions import (
     WalletNotFoundError,
 )
 from app.core.logging import get_logger
+from app.market_data.instruments import resolve_instrument, resolve_symbol
 from app.models.enums import OrderSide, OrderStatus, OrderType
 from app.models.trading import MAX_ORDER_QUANTITY, Order, Position, Trade
 from app.repositories.wallet_repository import WalletRepository
 from app.trading.execution import ExecutionEngine
 from app.trading.order_manager import OrderManager
-from app.trading.portfolio import PortfolioManager, PortfolioSnapshot
+from app.trading.portfolio import (
+    PortfolioManager,
+    PortfolioSnapshot,
+    PortfolioValuation,
+    value_portfolio,
+)
 from app.trading.position_manager import PositionManager, apply_fill
 
 logger = get_logger(__name__)
@@ -118,7 +125,7 @@ class TradingEngine:
 
         order = await self.orders.create(
             symbol=resolved_symbol,
-            exchange=settings.TRADING_EXCHANGE,
+            exchange=self._resolve_exchange(resolved_symbol),
             side=side,
             quantity=quantity,
             requested_price=requested_price,
@@ -176,7 +183,7 @@ class TradingEngine:
             from app.models.portfolio_snapshot import SnapshotSource
 
             await SnapshotService(self._session).capture(
-                mark_price=fill.price,
+                mark_prices={resolved_symbol: fill.price},
                 source=SnapshotSource.TRADE,
                 commit=False,
             )
@@ -217,7 +224,7 @@ class TradingEngine:
         if position is None:
             position = Position(
                 symbol=resolved,
-                exchange=settings.TRADING_EXCHANGE,
+                exchange=self._resolve_exchange(resolved),
                 quantity=0,
                 average_price=Decimal("0.0000"),
                 realized_pnl=Decimal("0.00"),
@@ -248,6 +255,31 @@ class TradingEngine:
             mark_price=mark_price,
         )
 
+    async def list_positions(self) -> list[Position]:
+        """Every instrument that has ever traded, alphabetically."""
+        result = await self._session.execute(
+            select(Position).order_by(Position.symbol.asc())
+        )
+        return list(result.scalars().all())
+
+    async def get_portfolio_summary(
+        self, *, mark_prices: dict[str, Decimal] | None = None
+    ) -> PortfolioValuation:
+        """Value the whole account across every instrument held.
+
+        One wallet, many positions. ``mark_prices`` maps symbol -> price; any
+        open position without one is reported unvalued rather than guessed at,
+        and its symbol is listed in ``unpriced_symbols``. As everywhere else,
+        prices are passed in rather than fetched.
+        """
+        wallet = await self._wallets.get()
+        if wallet is None:
+            raise WalletNotFoundError()
+        positions = await self.list_positions()
+        return value_portfolio(
+            wallet=wallet, positions=positions, mark_prices=mark_prices
+        )
+
     async def list_orders(
         self, *, limit: int = 100, offset: int = 0, status: OrderStatus | None = None
     ) -> list[Order]:
@@ -260,14 +292,13 @@ class TradingEngine:
 
     @staticmethod
     def _resolve_symbol(symbol: str | None) -> str:
-        if symbol is None:
-            return settings.TRADING_SYMBOL
-        if symbol.strip().upper() != settings.TRADING_SYMBOL.upper():
-            raise UnsupportedSymbolError(
-                f"This platform trades {settings.TRADING_EXCHANGE}:"
-                f"{settings.TRADING_SYMBOL} only. Received '{symbol}'."
-            )
-        return settings.TRADING_SYMBOL
+        """Any instrument in the supported universe; None means the default."""
+        return resolve_symbol(symbol)
+
+    @staticmethod
+    def _resolve_exchange(symbol: str) -> str:
+        """The exchange the instrument is listed on, not a global constant."""
+        return resolve_instrument(symbol).exchange
 
     @staticmethod
     def _validate_request(quantity: int, reference_price: Decimal) -> None:

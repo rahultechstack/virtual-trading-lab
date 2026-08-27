@@ -30,7 +30,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.automation.evaluator import condition_is_met
@@ -42,6 +42,11 @@ from app.models.automatic_order import AutomaticOrder, AutomaticOrderStatus
 
 logger = get_logger(__name__)
 
+#: Re-count ACTIVE orders at least this often, even while the cached count says
+#: there are none. Guards against a row inserted outside this process (psql, a
+#: second worker) never being noticed.
+REVALIDATE_EVERY_EVALUATIONS = 20
+
 
 class AutomaticOrderMonitor:
     """Evaluates ACTIVE automatic orders against each new price."""
@@ -49,10 +54,23 @@ class AutomaticOrderMonitor:
     def __init__(self, session_factory: async_sessionmaker | None = None) -> None:
         self._session_factory = session_factory or SessionLocal
         self._lock = asyncio.Lock()
+        #: How many ACTIVE orders exist, or None when that is unknown. With
+        #: none, a tick costs nothing at all -- no session, no query. Without
+        #: this the monitor opened a database connection on every single tick.
+        self._active_count: int | None = None
+        self._since_revalidate = 0
         #: Counters surfaced by the stream status endpoint.
         self.evaluations = 0
         self.triggered = 0
         self.failed = 0
+
+    def invalidate(self) -> None:
+        """Forget the cached ACTIVE count.
+
+        Called when an automatic order is created or cancelled, so the very
+        next tick re-reads instead of waiting for the periodic revalidation.
+        """
+        self._active_count = None
 
     async def on_price(
         self, *, market_price: Decimal, symbol: str | None = None
@@ -69,6 +87,8 @@ class AutomaticOrderMonitor:
 
         async with self._lock:
             try:
+                if not await self._has_active_orders():
+                    return []
                 return await self._evaluate(
                     market_price=market_price,
                     symbol=symbol or settings.TRADING_SYMBOL,
@@ -78,6 +98,30 @@ class AutomaticOrderMonitor:
                 return []
 
     # -- internals -------------------------------------------------------
+
+    async def _has_active_orders(self) -> bool:
+        """Cheap gate: is there anything to evaluate at all?
+
+        The overwhelmingly common case is an account with no standing orders,
+        where this avoids a database round trip on every price tick.
+        """
+        self._since_revalidate += 1
+        stale = (
+            self._active_count is None
+            or self._since_revalidate >= REVALIDATE_EVERY_EVALUATIONS
+        )
+        if stale:
+            async with self._session_factory() as session:
+                count = (
+                    await session.execute(
+                        select(func.count(AutomaticOrder.id)).where(
+                            AutomaticOrder.status == AutomaticOrderStatus.ACTIVE
+                        )
+                    )
+                ).scalar_one()
+            self._active_count = int(count)
+            self._since_revalidate = 0
+        return (self._active_count or 0) > 0
 
     async def _evaluate(
         self, *, market_price: Decimal, symbol: str
@@ -93,6 +137,11 @@ class AutomaticOrderMonitor:
             if claimed is None:
                 break
             events.append(await self._execute(claimed, market_price))
+
+        # Firing changes how many remain, and reconciliation may have retired
+        # others in the same transaction.
+        if events:
+            self.invalidate()
 
         return events
 
@@ -236,6 +285,7 @@ class AutomaticOrderMonitor:
             "evaluations": self.evaluations,
             "triggered": self.triggered,
             "failed": self.failed,
+            "active_cached": self._active_count,
         }
 
 

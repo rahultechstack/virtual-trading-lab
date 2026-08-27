@@ -59,7 +59,9 @@ class PortfolioSnapshot(Base):
         index=True,
     )
 
-    symbol: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: The instrument, when exactly one position is open. NULL for a
+    #: portfolio holding none or several -- no single symbol describes it.
+    symbol: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     #: Signed position at the time: > 0 long, 0 flat, < 0 short.
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

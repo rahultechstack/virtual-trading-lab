@@ -25,6 +25,7 @@ from app.core.exceptions import (
     UnsupportedSymbolError,
 )
 from app.core.logging import get_logger
+from app.market_data.instruments import resolve_instrument, resolve_symbol
 from app.models.automatic_order import (
     AutomaticOrder,
     AutomaticOrderStatus,
@@ -40,6 +41,17 @@ logger = get_logger(__name__)
 REASON_POSITION_CLOSED = "Position closed; the stop-loss no longer protects anything."
 REASON_POSITION_REVERSED = "Position reversed direction; the stop-loss no longer applies."
 REASON_USER_CANCELLED = "Cancelled by the user."
+
+
+def _invalidate_monitor() -> None:
+    """Drop the monitor's cached ACTIVE count.
+
+    Imported locally: the monitor imports the trading engine, which imports
+    this service back.
+    """
+    from app.automation.monitor import get_automatic_order_monitor
+
+    get_automatic_order_monitor().invalidate()
 
 
 class AutomaticOrderService:
@@ -88,7 +100,7 @@ class AutomaticOrderService:
 
         order = AutomaticOrder(
             symbol=resolved,
-            exchange=settings.TRADING_EXCHANGE,
+            exchange=resolve_instrument(resolved).exchange,
             order_type=order_type,
             trigger_price=trigger_price,
             trigger_condition=trigger_condition,
@@ -101,6 +113,10 @@ class AutomaticOrderService:
         if commit:
             await self._session.commit()
             await self._session.refresh(order)
+
+        # Tell the monitor to re-count, so the next tick sees this order
+        # rather than waiting for its periodic revalidation.
+        _invalidate_monitor()
 
         logger.info(
             "Automatic order %s created: %s %s %s -> %s %s",
@@ -117,14 +133,8 @@ class AutomaticOrderService:
 
     @staticmethod
     def _resolve_symbol(symbol: str | None) -> str:
-        if symbol is None:
-            return settings.TRADING_SYMBOL
-        if symbol.strip().upper() != settings.TRADING_SYMBOL.upper():
-            raise UnsupportedSymbolError(
-                f"This platform trades {settings.TRADING_EXCHANGE}:"
-                f"{settings.TRADING_SYMBOL} only. Received '{symbol}'."
-            )
-        return settings.TRADING_SYMBOL
+        """Any instrument in the supported universe; None means the default."""
+        return resolve_symbol(symbol)
 
     @staticmethod
     def _validate_basics(*, quantity: int, trigger_price: Decimal) -> None:
@@ -304,6 +314,7 @@ class AutomaticOrderService:
         self._mark_cancelled(order, reason)
         await self._session.commit()
         await self._session.refresh(order)
+        _invalidate_monitor()
         logger.info("Automatic order %s cancelled: %s", order.id, reason)
         return order
 

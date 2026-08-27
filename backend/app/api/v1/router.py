@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from app.api.v1.endpoints import (
     automatic_orders,
     backtest,
+    instruments,
     health,
     indicators,
     market_data,
@@ -16,6 +17,7 @@ from app.api.v1.endpoints import (
 
 api_router = APIRouter()
 api_router.include_router(health.router)
+api_router.include_router(instruments.router)
 api_router.include_router(wallet.router)
 api_router.include_router(market_data.router)
 api_router.include_router(indicators.router)

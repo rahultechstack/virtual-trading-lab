@@ -595,7 +595,7 @@ async def test_rejects_non_positive_trigger_price(session: AsyncSession):
         )
 
 
-async def test_rejects_another_symbol(session: AsyncSession):
+async def test_rejects_a_symbol_outside_the_universe(session: AsyncSession):
     await _wallet(session)
     with pytest.raises(UnsupportedSymbolError):
         await AutomaticOrderService(session).create(
@@ -604,7 +604,7 @@ async def test_rejects_another_symbol(session: AsyncSession):
             trigger_condition=TriggerCondition.LTE,
             action=OrderSide.BUY,
             quantity=10,
-            symbol="TCS",
+            symbol="AAPL",
         )
 
 

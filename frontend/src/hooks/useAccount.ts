@@ -45,7 +45,10 @@ interface AccountState {
  * single `refresh()` after an order updates every panel from one consistent
  * set of reads, rather than each panel polling on its own schedule.
  */
-export function useAccount(markPrice: string | null): AccountState {
+export function useAccount(
+  markPrice: string | null,
+  symbol?: string | null,
+): AccountState {
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [position, setPosition] = useState<Position | null>(null);
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
@@ -57,13 +60,16 @@ export function useAccount(markPrice: string | null): AccountState {
 
   const activeRef = useRef(true);
   const markPriceRef = useRef<string | null>(markPrice);
+  const symbolRef = useRef<string | null>(symbol ?? null);
   const lastRevaluedAtRef = useRef(0);
 
   markPriceRef.current = markPrice;
+  symbolRef.current = symbol ?? null;
 
   const refresh = useCallback(async () => {
     try {
       const mark = markPriceRef.current;
+      const instrument = symbolRef.current;
       const [walletResult, positionResult, portfolioResult, orderResult, tradeResult] =
         await Promise.all([
           fetchWallet().catch((err: unknown) => {
@@ -71,8 +77,8 @@ export function useAccount(markPrice: string | null): AccountState {
             if (err instanceof ApiError && err.isNotFound) return null;
             throw err;
           }),
-          fetchPosition(),
-          fetchPortfolio(mark).catch((err: unknown) => {
+          fetchPosition(instrument),
+          fetchPortfolio(mark, instrument).catch((err: unknown) => {
             if (err instanceof ApiError && err.isNotFound) return null;
             throw err;
           }),
@@ -117,6 +123,14 @@ export function useAccount(markPrice: string | null): AccountState {
     };
   }, [refresh]);
 
+  // Switching instruments reloads position and portfolio for the new one.
+  // Orders, trades and the wallet are account-wide and come back too, from
+  // the same consistent set of reads.
+  useEffect(() => {
+    setLoading(true);
+    void refresh();
+  }, [symbol, refresh]);
+
   // Revalue the open position as the price moves, at most once per throttle
   // window so a fast feed does not hammer the API.
   useEffect(() => {
@@ -126,7 +140,7 @@ export function useAccount(markPrice: string | null): AccountState {
     let cancelled = false;
     lastRevaluedAtRef.current = Date.now();
 
-    fetchPortfolio(markPrice)
+    fetchPortfolio(markPrice, symbolRef.current)
       .then((result) => {
         if (!cancelled && activeRef.current) setPortfolio(result);
       })

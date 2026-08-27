@@ -167,3 +167,131 @@ class PortfolioManager:
             mark_price=mark_price,
             currency=wallet.currency,
         )
+
+
+@dataclass(frozen=True)
+class PositionValuation:
+    """One position inside a multi-instrument portfolio."""
+
+    symbol: str
+    exchange: str
+    quantity: int
+    average_price: Decimal
+    mark_price: Decimal | None
+    position_value: Decimal
+    unrealized_pnl: Decimal
+    realized_pnl: Decimal
+    total_charges: Decimal
+    net_realized_pnl: Decimal
+
+
+@dataclass(frozen=True)
+class PortfolioValuation:
+    """The whole account: one wallet, many instruments.
+
+    Totals are sums across every position that has ever traded. A position with
+    no ``mark_price`` supplied contributes zero to ``position_value`` and
+    ``unrealized_pnl`` -- the same rule the single-instrument snapshot uses,
+    because the engine never fetches prices itself.
+    """
+
+    cash_balance: Decimal
+    initial_balance: Decimal
+    realized_pnl: Decimal
+    total_charges: Decimal
+    net_realized_pnl: Decimal
+    unrealized_pnl: Decimal
+    position_value: Decimal
+    total_equity: Decimal
+    total_pnl: Decimal
+    net_total_pnl: Decimal
+    currency: str
+    #: Only instruments with a non-zero position or some realized history.
+    positions: list[PositionValuation]
+    #: Instruments the caller supplied no mark price for, so they are unvalued.
+    unpriced_symbols: list[str]
+
+
+def value_portfolio(
+    *,
+    wallet: Wallet,
+    positions: list,
+    mark_prices: dict[str, Decimal] | None = None,
+) -> PortfolioValuation:
+    """Aggregate a wallet and every position into one valuation.
+
+    Pure: takes rows and a price map, returns numbers. The engine stays
+    independent of the market-data layer, exactly as the single-instrument
+    path already does.
+    """
+    marks = {key.upper(): value for key, value in (mark_prices or {}).items()}
+
+    valuations: list[PositionValuation] = []
+    unpriced: list[str] = []
+
+    total_position_value = Decimal("0.00")
+    total_unrealized = Decimal("0.00")
+    total_realized = Decimal("0.00")
+    total_charges = Decimal("0.00")
+    total_net_realized = Decimal("0.00")
+
+    for position in positions:
+        mark = marks.get(position.symbol.upper())
+        if position.quantity != 0 and mark is None:
+            unpriced.append(position.symbol)
+
+        if mark is None or position.quantity == 0:
+            position_value = Decimal("0.00")
+            unrealized = Decimal("0.00")
+        else:
+            position_value = PnLCalculator.position_value(
+                quantity=position.quantity, mark_price=mark
+            )
+            unrealized = PnLCalculator.unrealized_pnl(
+                quantity=position.quantity,
+                average_price=position.average_price,
+                mark_price=mark,
+            )
+
+        total_position_value += position_value
+        total_unrealized += unrealized
+        total_realized += position.realized_pnl
+        total_charges += position.total_charges
+        total_net_realized += position.net_realized_pnl
+
+        valuations.append(
+            PositionValuation(
+                symbol=position.symbol,
+                exchange=position.exchange,
+                quantity=position.quantity,
+                average_price=position.average_price,
+                mark_price=mark if position.quantity != 0 else None,
+                position_value=position_value,
+                unrealized_pnl=unrealized,
+                realized_pnl=position.realized_pnl,
+                total_charges=position.total_charges,
+                net_realized_pnl=position.net_realized_pnl,
+            )
+        )
+
+    total_position_value = to_money(total_position_value)
+    total_unrealized = to_money(total_unrealized)
+    total_realized = to_money(total_realized)
+    total_charges = to_money(total_charges)
+    total_net_realized = to_money(total_net_realized)
+
+    return PortfolioValuation(
+        cash_balance=wallet.cash_balance,
+        initial_balance=wallet.initial_balance,
+        realized_pnl=total_realized,
+        total_charges=total_charges,
+        net_realized_pnl=total_net_realized,
+        unrealized_pnl=total_unrealized,
+        position_value=total_position_value,
+        total_equity=to_money(wallet.cash_balance + total_position_value),
+        total_pnl=to_money(total_realized + total_unrealized),
+        net_total_pnl=to_money(total_net_realized + total_unrealized),
+        currency=wallet.currency,
+        positions=valuations,
+        unpriced_symbols=unpriced,
+    )

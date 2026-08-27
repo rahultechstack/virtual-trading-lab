@@ -40,6 +40,7 @@ interface UseIndicatorsResult {
 export function useIndicators(
   interval: Interval,
   limit: number,
+  symbol?: string | null,
 ): UseIndicatorsResult {
   const [enabled, setEnabled] = useState<string[]>(loadEnabled);
   const [indicators, setIndicators] = useState<Indicator[]>([]);
@@ -90,7 +91,7 @@ export function useIndicators(
     setLoading(true);
     setError(null);
 
-    fetchIndicators(interval, limit, specs, controller.signal)
+    fetchIndicators(interval, limit, specs, symbol, controller.signal)
       .then((result) => {
         if (cancelled) return;
         setIndicators(result.indicators);
@@ -106,7 +107,7 @@ export function useIndicators(
       cancelled = true;
       controller.abort();
     };
-  }, [interval, limit, specs]);
+  }, [interval, limit, specs, symbol]);
 
   return { enabled, toggle, clear, indicators, loading, error };
 }

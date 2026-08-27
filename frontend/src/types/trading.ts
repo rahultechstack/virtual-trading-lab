@@ -123,3 +123,38 @@ export const SIDE_LABELS: Record<OrderSide, string> = {
 export function isBullishSide(side: OrderSide): boolean {
   return side === 'BUY' || side === 'BUY_TO_COVER';
 }
+
+/** One instrument inside the multi-stock portfolio. */
+export interface PositionValuation {
+  symbol: string;
+  exchange: string;
+  quantity: number;
+  average_price: string;
+  mark_price: string | null;
+  position_value: string;
+  unrealized_pnl: string;
+  realized_pnl: string;
+  total_charges: string;
+  net_realized_pnl: string;
+}
+
+/**
+ * Whole-account valuation: one wallet, many instruments.
+ * Mirrors `PortfolioSummaryResponse` in `backend/app/schemas/trading.py`.
+ */
+export interface PortfolioSummary {
+  cash_balance: string;
+  initial_balance: string;
+  realized_pnl: string;
+  total_charges: string;
+  net_realized_pnl: string;
+  unrealized_pnl: string;
+  position_value: string;
+  total_equity: string;
+  total_pnl: string;
+  net_total_pnl: string;
+  currency: string;
+  positions: PositionValuation[];
+  /** Open positions no mark price was supplied for. */
+  unpriced_symbols: string[];
+}

@@ -78,6 +78,15 @@ export interface AutomaticOrderEvent {
   position_after?: number;
 }
 
+/** Confirms which instruments this socket is receiving. */
+export interface StreamSubscription {
+  symbols: string[];
+  symbol?: string;
+  exchange?: string;
+  company_name?: string;
+  server_time: string;
+}
+
 export interface StreamError {
   message: string;
   detail?: string;
@@ -89,6 +98,7 @@ export type StreamMessage =
   | { type: 'tick'; data: PriceTick }
   | { type: 'status'; data: StreamStatus }
   | { type: 'error'; data: StreamError }
+  | { type: 'subscription'; data: StreamSubscription }
   | { type: 'automatic_order'; data: AutomaticOrderEvent }
   | { type: 'pong'; data: { server_time: string } };
 

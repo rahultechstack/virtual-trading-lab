@@ -194,3 +194,49 @@ class ExecutionCostPreview(BaseModel):
     total_execution_cost: Decimal = Field(
         description="Spread plus slippage plus charges."
     )
+
+
+class PositionValuationResponse(BaseModel):
+    """One instrument inside the multi-stock portfolio."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    symbol: str
+    exchange: str
+    quantity: int = Field(description="Signed: >0 long, 0 flat, <0 short.")
+    average_price: Decimal
+    mark_price: Decimal | None = Field(
+        default=None, description="Price it was valued at. Null when unpriced or flat."
+    )
+    position_value: Decimal
+    unrealized_pnl: Decimal
+    realized_pnl: Decimal
+    total_charges: Decimal
+    net_realized_pnl: Decimal
+
+
+class PortfolioSummaryResponse(BaseModel):
+    """The whole account: one wallet, many instruments.
+
+    Every total is summed across all instruments ever traded. An open position
+    with no supplied mark price contributes zero and is named in
+    ``unpriced_symbols`` -- the engine never fetches prices itself.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    cash_balance: Decimal
+    initial_balance: Decimal
+    realized_pnl: Decimal = Field(description="Gross, before charges, across all stocks.")
+    total_charges: Decimal
+    net_realized_pnl: Decimal
+    unrealized_pnl: Decimal
+    position_value: Decimal
+    total_equity: Decimal = Field(description="cash + total position value.")
+    total_pnl: Decimal
+    net_total_pnl: Decimal = Field(description="The figure after all costs.")
+    currency: str
+    positions: list[PositionValuationResponse]
+    unpriced_symbols: list[str] = Field(
+        description="Open positions no mark price was supplied for."
+    )

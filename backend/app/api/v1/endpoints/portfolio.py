@@ -9,6 +9,7 @@ from fastapi import APIRouter, Query, status
 from app.analytics.performance import PerformanceAnalyzer
 from app.analytics.snapshots import SnapshotService
 from app.api.deps import DbSession
+from app.market_data.instruments import resolve_symbol
 from app.models.portfolio_snapshot import SnapshotSource
 from app.schemas.portfolio import (
     PerformanceResponse,
@@ -65,6 +66,10 @@ async def capture_snapshot(
         Decimal | None,
         Query(gt=0, description="Price to value an open position at."),
     ] = None,
+    symbol: Annotated[
+        str | None,
+        Query(description="Which instrument mark_price refers to."),
+    ] = None,
 ) -> SnapshotResponse:
     """Record the account's value right now.
 
@@ -72,7 +77,9 @@ async def capture_snapshot(
     records the cash side only.
     """
     snapshot = await SnapshotService(session).capture(
-        mark_price=mark_price, source=SnapshotSource.MANUAL
+        mark_price=mark_price,
+        symbol=resolve_symbol(symbol) if symbol else None,
+        source=SnapshotSource.MANUAL,
     )
     return SnapshotResponse.model_validate(snapshot)
 

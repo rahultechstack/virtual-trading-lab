@@ -57,6 +57,7 @@ async def run_backtest(
         start=payload.start,
         end=payload.end,
         limit=payload.limit,
+        symbol=payload.symbol,
     )
 
     engine = BacktestEngine(

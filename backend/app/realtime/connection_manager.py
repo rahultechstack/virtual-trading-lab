@@ -47,6 +47,9 @@ class ConnectionManager:
 
     def __init__(self, *, max_connections: int = 50) -> None:
         self._connections: set[WebSocket] = set()
+        #: socket -> the symbols it wants. An empty set means "everything",
+        #: which is what a client that never subscribes gets.
+        self._subscriptions: dict[WebSocket, set[str]] = {}
         self._lock = asyncio.Lock()
         self.max_connections = max_connections
         self.stats = ConnectionStats()
@@ -85,6 +88,7 @@ class ConnectionManager:
 
         async with self._lock:
             self._connections.add(websocket)
+            self._subscriptions.setdefault(websocket, set())
             self.stats.total_accepted += 1
 
         logger.info(
@@ -96,6 +100,7 @@ class ConnectionManager:
         async with self._lock:
             was_present = websocket in self._connections
             self._connections.discard(websocket)
+            self._subscriptions.pop(websocket, None)
 
         if was_present:
             self.stats.total_disconnected += 1
@@ -117,6 +122,7 @@ class ConnectionManager:
         async with self._lock:
             sockets = list(self._connections)
             self._connections.clear()
+            self._subscriptions.clear()
 
         for socket in sockets:
             try:
@@ -127,6 +133,54 @@ class ConnectionManager:
 
         if sockets:
             logger.info("Closed %d WebSocket connection(s) on shutdown.", len(sockets))
+
+    # -- subscriptions ---------------------------------------------------
+
+    async def subscribe(self, websocket: WebSocket, symbol: str) -> None:
+        """Route ``symbol``'s ticks to this client."""
+        async with self._lock:
+            self._subscriptions.setdefault(websocket, set()).add(symbol.upper())
+
+    async def unsubscribe(self, websocket: WebSocket, symbol: str) -> None:
+        """Stop routing ``symbol`` to this client."""
+        async with self._lock:
+            self._subscriptions.get(websocket, set()).discard(symbol.upper())
+
+    async def set_subscription(self, websocket: WebSocket, symbol: str) -> None:
+        """Replace this client's subscriptions with exactly ``symbol``.
+
+        Switching instruments in the UI is a *replace*, not an add: without
+        this a user browsing several stocks would accumulate subscriptions and
+        keep paying for upstream polls they no longer look at.
+        """
+        async with self._lock:
+            self._subscriptions[websocket] = {symbol.upper()}
+
+    def subscriptions_for(self, websocket: WebSocket) -> set[str]:
+        return set(self._subscriptions.get(websocket, set()))
+
+    def subscribed_symbols(self) -> set[str]:
+        """Union of every client's subscriptions.
+
+        The price stream polls exactly this set, so nothing is fetched for an
+        instrument nobody is watching.
+        """
+        symbols: set[str] = set()
+        for wanted in self._subscriptions.values():
+            symbols |= wanted
+        return symbols
+
+    def _wants(self, websocket: WebSocket, symbol: str | None) -> bool:
+        """Whether this socket should receive a message about ``symbol``.
+
+        A socket with no subscriptions receives everything -- that keeps a
+        bare client (and the existing tests) working without a subscribe
+        handshake.
+        """
+        if symbol is None:
+            return True
+        wanted = self._subscriptions.get(websocket)
+        return not wanted or symbol.upper() in wanted
 
     # -- sending ---------------------------------------------------------
 
@@ -143,14 +197,27 @@ class ConnectionManager:
         self.stats.messages_sent += 1
         return True
 
-    async def broadcast(self, message: dict[str, Any]) -> int:
-        """Fan a message out to every client. Returns how many received it.
+    async def broadcast_to_symbol(self, symbol: str, message: dict[str, Any]) -> int:
+        """Fan a message out only to clients subscribed to ``symbol``."""
+        return await self.broadcast(message, symbol=symbol)
+
+    async def broadcast(
+        self, message: dict[str, Any], *, symbol: str | None = None
+    ) -> int:
+        """Fan a message out. Returns how many clients received it.
+
+        With ``symbol``, only clients subscribed to it (or to nothing at
+        all) are targeted.
 
         Sends run concurrently so one slow client cannot hold up the rest, and
         any that fail are removed from the pool.
         """
         async with self._lock:
-            targets = list(self._connections)
+            targets = [
+                socket
+                for socket in self._connections
+                if self._wants(socket, symbol)
+            ]
 
         if not targets:
             return 0

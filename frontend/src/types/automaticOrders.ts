@@ -37,6 +37,8 @@ export interface CreateAutomaticOrderRequest {
   quantity: number;
   /** Optional; lets the backend reject a stop that would fire immediately. */
   reference_price?: string | null;
+  /** Instrument. Defaults to the backend's configured default. */
+  symbol?: string;
 }
 
 export const CONDITION_LABELS: Record<TriggerCondition, string> = {

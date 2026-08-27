@@ -104,7 +104,7 @@ export function PriceChart({ symbol, exchange, tick }: Props) {
     indicators,
     loading: indicatorsLoading,
     error: indicatorError,
-  } = useIndicators(timeframe.interval, timeframe.limit);
+  } = useIndicators(timeframe.interval, timeframe.limit, symbol);
 
   const overlays = indicators.filter((indicator) => indicator.pane === 'price');
   const oscillators = indicators.filter((indicator) => indicator.pane === 'separate');
@@ -238,7 +238,7 @@ export function PriceChart({ symbol, exchange, tick }: Props) {
     setLoading(true);
     setError(null);
 
-    fetchCandles(timeframe.interval, timeframe.limit, controller.signal)
+    fetchCandles(timeframe.interval, timeframe.limit, symbol, controller.signal)
       .then((series) => {
         if (cancelled) return;
         const candles = series.candles;
@@ -262,7 +262,8 @@ export function PriceChart({ symbol, exchange, tick }: Props) {
       cancelled = true;
       controller.abort();
     };
-  }, [timeframe]);
+    // Refetched on instrument change too: the chart is per-symbol.
+  }, [timeframe, symbol]);
 
   // -- draw the price-pane overlays --------------------------------------
   useEffect(() => {

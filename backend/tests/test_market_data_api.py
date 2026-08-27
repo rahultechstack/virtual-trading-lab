@@ -143,8 +143,8 @@ async def test_quote_endpoint_reports_delay_status(market_client):
     assert body["provider"] == "fake"
 
 
-async def test_quote_rejects_any_symbol_other_than_reliance(market_client):
-    response = await market_client.get(f"{BASE}/quote", params={"symbol": "TCS"})
+async def test_quote_rejects_a_symbol_outside_the_universe(market_client):
+    response = await market_client.get(f"{BASE}/quote", params={"symbol": "AAPL"})
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "unsupported_symbol"
@@ -232,8 +232,8 @@ async def test_candles_reject_an_unknown_interval_at_validation(market_client):
     assert response.status_code == 422
 
 
-async def test_candles_reject_a_foreign_symbol(market_client):
-    response = await market_client.get(f"{BASE}/candles", params={"symbol": "INFY"})
+async def test_candles_reject_a_symbol_outside_the_universe(market_client):
+    response = await market_client.get(f"{BASE}/candles", params={"symbol": "AAPL"})
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "unsupported_symbol"
@@ -270,11 +270,19 @@ async def test_service_returns_none_bid_ask_when_provider_lacks_depth():
     assert quote.ask is None
 
 
-async def test_service_rejects_other_symbols():
+async def test_service_rejects_symbols_outside_the_universe():
     service = RelianceMarketDataService(FakeProvider())
 
     with pytest.raises(UnsupportedSymbolError):
-        await service.get_current_quote("HDFCBANK")
+        await service.get_current_quote("AAPL")
+
+
+async def test_service_accepts_any_supported_instrument():
+    """Multi-instrument: HDFCBANK is served exactly as RELIANCE is."""
+    service = RelianceMarketDataService(FakeProvider())
+
+    quote = await service.get_current_quote("HDFCBANK")
+    assert quote.symbol == "HDFCBANK"
 
 
 async def test_service_rejects_unsupported_interval():

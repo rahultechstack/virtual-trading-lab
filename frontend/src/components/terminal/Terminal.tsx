@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { AutomaticOrderPanel } from './AutomaticOrderPanel';
+import { StockSelector } from './StockSelector';
 import { OrdersPanel } from './OrdersPanel';
 import { PositionPanel } from './PositionPanel';
 import { PriceChart } from './PriceChart';
@@ -9,6 +10,7 @@ import { TradeHistory } from './TradeHistory';
 import { TradingPanel } from './TradingPanel';
 import { WalletPanel } from './WalletPanel';
 import { DEFAULT_EXCHANGE, DEFAULT_SYMBOL } from '@/config/instrument';
+import type { Instrument } from '@/types/instruments';
 import { useAccount } from '@/hooks/useAccount';
 import { useLivePrice } from '@/hooks/useLivePrice';
 
@@ -24,8 +26,20 @@ type Tab = 'orders' | 'trades';
  *   fills so every panel updates from one consistent set of reads.
  */
 export function Terminal() {
+  // The instrument being viewed and traded. Switching it does NOT reload the
+  // app: every panel refetches for the new symbol, and the WebSocket
+  // re-subscribes on the same connection.
+  const [instrument, setInstrument] = useState<Instrument | null>({
+    symbol: DEFAULT_SYMBOL,
+    company_name: '',
+    exchange: DEFAULT_EXCHANGE,
+    instrument_type: 'EQUITY',
+    data_available: null,
+  });
+  const symbol = instrument?.symbol ?? DEFAULT_SYMBOL;
+
   const { tick, automaticOrderEvent, status, connection, attempt, isStale, reconnect } =
-    useLivePrice();
+    useLivePrice(symbol);
   const markPrice = tick?.last_price ?? null;
 
   const {
@@ -39,7 +53,7 @@ export function Terminal() {
     needsWallet,
     refresh,
     createWallet,
-  } = useAccount(markPrice);
+  } = useAccount(markPrice, symbol);
 
   const [tab, setTab] = useState<Tab>('orders');
   // Bumped whenever the automatic-order list needs reloading.
@@ -64,6 +78,10 @@ export function Terminal() {
 
   return (
     <div className="terminal">
+      <div className="terminal__instrument">
+        <StockSelector selected={instrument} onSelect={setInstrument} />
+      </div>
+
       <TerminalHeader
         tick={tick}
         status={status}
@@ -92,8 +110,8 @@ export function Terminal() {
       <div className="terminal__body">
         <div className="terminal__main">
           <PriceChart
-            symbol={tick?.symbol ?? DEFAULT_SYMBOL}
-            exchange={tick?.exchange ?? DEFAULT_EXCHANGE}
+            symbol={symbol}
+            exchange={instrument?.exchange ?? DEFAULT_EXCHANGE}
             tick={tick}
           />
 
@@ -146,6 +164,7 @@ export function Terminal() {
 
         <aside className="terminal__side">
           <TradingPanel
+            symbol={symbol}
             referencePrice={markPrice}
             position={position}
             disabled={needsWallet}
@@ -153,6 +172,7 @@ export function Terminal() {
           />
 
           <AutomaticOrderPanel
+            symbol={symbol}
             position={position}
             referencePrice={markPrice}
             disabled={needsWallet}

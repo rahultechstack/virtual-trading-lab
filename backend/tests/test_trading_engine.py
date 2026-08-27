@@ -317,14 +317,28 @@ async def test_non_positive_price_is_rejected(engine, price):
         )
 
 
-async def test_foreign_symbol_is_rejected(engine):
+async def test_symbol_outside_the_universe_is_rejected(engine):
+    """AAPL is a real ticker but not an NSE instrument this platform supports."""
     with pytest.raises(UnsupportedSymbolError):
         await engine.place_order(
             side=OrderSide.BUY,
             quantity=100,
             reference_price=D("1400"),
-            symbol="TCS",
+            symbol="AAPL",
         )
+
+
+async def test_a_supported_symbol_other_than_the_default_is_accepted(engine):
+    """The platform is multi-instrument: TCS is as tradable as RELIANCE."""
+    result = await engine.place_order(
+        side=OrderSide.BUY,
+        quantity=10,
+        reference_price=D("3200"),
+        symbol="TCS",
+    )
+    assert result.order.symbol == "TCS"
+    assert result.position.symbol == "TCS"
+    assert result.position.quantity == 10
 
 
 async def test_sell_without_a_long_is_rejected(engine):

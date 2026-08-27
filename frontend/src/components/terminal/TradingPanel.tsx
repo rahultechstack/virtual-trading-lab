@@ -19,6 +19,8 @@ const SIDES: ReadonlyArray<{
 ];
 
 interface Props {
+  /** Instrument being traded. Sent with every order. */
+  symbol: string | null;
   referencePrice: string | null;
   position: Position | null;
   disabled?: boolean;
@@ -33,6 +35,7 @@ interface Props {
  * here is deliberately not promised as the execution price.
  */
 export function TradingPanel({
+  symbol,
   referencePrice,
   position,
   disabled = false,
@@ -58,6 +61,7 @@ export function TradingPanel({
         side,
         quantity,
         reference_price: referencePrice,
+        ...(symbol ? { symbol } : {}),
       });
       setLastFill(result);
       onFilled(result);
@@ -73,7 +77,7 @@ export function TradingPanel({
     <section className="panel">
       <header className="panel__header">
         <h2 className="panel__title">Order</h2>
-        <span className="muted panel__subtitle">Market</span>
+        <span className="muted panel__subtitle">{symbol ?? 'Market'}</span>
       </header>
 
       <label className="field">

@@ -2469,3 +2469,164 @@ and reloads the trigger list. No page refresh is needed.
 For a stop-loss the panel **pre-fills and locks** condition + action from the
 open position. That is convenience only — the backend re-derives and
 re-validates, and the frontend never evaluates a price against a trigger.
+
+---
+
+## 14. Multi-Instrument API
+
+The platform trades any instrument in the supported universe against one
+wallet. **Auth: none required**, as everywhere else. Architecture in
+`ARCHITECTURE.md` §19.
+
+### 14.1 New and changed endpoints
+
+| # | Method | Path | Purpose |
+|---|--------|------|---------|
+| 31 | GET | `/api/v1/instruments` | Supported universe, with search |
+| 32 | GET | `/api/v1/instruments/{symbol}` | One instrument, availability verified |
+| 33 | GET | `/api/v1/trading/positions` | Every instrument ever traded |
+| 34 | GET | `/api/v1/trading/portfolio/summary` | Whole-account valuation across stocks |
+
+Endpoints that **gained an optional `symbol`** (defaulting to
+`settings.TRADING_SYMBOL`, so every existing call is unchanged):
+
+| Endpoint | Parameter |
+|---|---|
+| `GET /market-data/quote` | `symbol` (already existed; no longer restricted) |
+| `GET /market-data/candles` | `symbol` (already existed; no longer restricted) |
+| `GET /indicators` | `symbol` **(new)** |
+| `GET /trading/position` | `symbol` **(new)** |
+| `GET /trading/portfolio` | `symbol` **(new)** |
+| `POST /trading/orders` | `symbol` (already existed; no longer restricted) |
+| `POST /automatic-orders` | `symbol` (already existed; no longer restricted) |
+| `POST /portfolio/snapshots` | `symbol` **(new)** |
+| `POST /strategies/backtest` | `symbol` **(new, body field)** |
+
+### 14.2 `GET /api/v1/instruments`
+
+File: `app/api/v1/endpoints/instruments.py`.
+
+| Query | Type | Default | Validation |
+|---|---|---|---|
+| `search` | `str \| None` | `None` | matches symbol or company name, case-insensitive |
+| `limit` | `int` | `50` | `ge=1, le=500` |
+
+Response `list[InstrumentResponse]`. `200`. No errors.
+
+```bash
+curl "http://localhost:8000/api/v1/instruments?search=tcs"
+```
+```json
+[{"symbol":"TCS","company_name":"Tata Consultancy Services","exchange":"NSE",
+  "instrument_type":"EQUITY","data_available":null}]
+```
+
+`data_available` is `null` until the symbol has been probed; ranking is exact
+symbol > symbol prefix > name prefix > substring.
+
+### 14.3 `GET /api/v1/instruments/{symbol}`
+
+Resolves one instrument **and probes the provider** (cached per process).
+
+`200`; `400 unsupported_symbol` when outside the universe.
+
+```json
+{"symbol":"INFY","company_name":"Infosys","exchange":"NSE",
+ "instrument_type":"EQUITY","data_available":true}
+```
+
+### 14.4 `GET /api/v1/trading/positions`
+
+No parameters. Response `list[PositionResponse]`, alphabetical, including flat
+rows that still carry realized history. `200`.
+
+### 14.5 `GET /api/v1/trading/portfolio/summary`
+
+| Query | Type | Validation |
+|---|---|---|
+| `marks` | `str \| None` | `SYMBOL:PRICE` pairs, comma separated |
+
+Response `PortfolioSummaryResponse`. `200`;
+`400 invalid_order` on a malformed mark; `400 unsupported_symbol` for an unknown
+symbol in `marks`; `404 wallet_not_found`.
+
+```bash
+curl "http://localhost:8000/api/v1/trading/portfolio/summary?marks=TCS:2248.40,INFY:1110.80"
+```
+```json
+{"cash_balance":"991511.32","position_value":"7909.60","total_equity":"999420.92",
+ "realized_pnl":"21619.29","total_charges":"15.36","net_realized_pnl":"21603.93",
+ "unrealized_pnl":"-4.34","total_pnl":"21614.95","net_total_pnl":"21599.59",
+ "currency":"INR",
+ "positions":[{"symbol":"INFY","exchange":"NSE","quantity":-3,
+               "average_price":"1110.4700","mark_price":"1110.80",
+               "position_value":"-3332.40","unrealized_pnl":"-0.99",
+               "realized_pnl":"0.00","total_charges":"2.30",
+               "net_realized_pnl":"-2.30"}],
+ "unpriced_symbols":[]}
+```
+
+An open position with no supplied mark contributes **zero** and is named in
+`unpriced_symbols` — never guessed at.
+
+### 14.6 Schemas added
+
+| Class | File |
+|---|---|
+| `InstrumentResponse` | `app/schemas/instruments.py` |
+| `PositionValuationResponse` | `app/schemas/trading.py` |
+| `PortfolioSummaryResponse` | `app/schemas/trading.py` |
+
+### 14.7 WebSocket changes
+
+Same socket. New **client → server** messages:
+
+```json
+{"type":"subscribe","symbol":"TCS"}
+{"type":"unsubscribe","symbol":"TCS"}
+```
+
+`subscribe` **replaces** the socket's subscription rather than adding to it.
+New **server → client** frame:
+
+```json
+{"type":"subscription",
+ "data":{"symbols":["TCS"],"symbol":"TCS","exchange":"NSE",
+         "company_name":"Tata Consultancy Services",
+         "server_time":"2026-08-28T07:10:22.418Z"}}
+```
+
+Sent on connect (for the default instrument), after every `subscribe`, and
+after every `unsubscribe`. An unsupported symbol returns a non-fatal `error`
+frame and leaves the previous subscription in place. Ticks are routed by
+symbol; the cached tick for a newly subscribed symbol is replayed immediately.
+
+`GET /stream/status` gains `subscribed_symbols`, and its `automation` block
+gains `active_cached`.
+
+Typed in `frontend/src/types/stream.ts` as `StreamSubscription`.
+
+### 14.8 Database changes
+
+| Change | Detail |
+|---|---|
+| Migration `9f2b6c31ae74` | `portfolio_snapshots.symbol` → **nullable** |
+| Location | `./data/postgres` inside the project (bind mount), replacing the `vtrader_postgres_data` named volume |
+
+`orders`, `trades`, `positions` and `automatic_orders` needed **no** schema
+change — all already carry `symbol`, and `positions` is keyed by it.
+
+### 14.9 Frontend
+
+| File | Role |
+|---|---|
+| `frontend/src/types/instruments.ts` | contracts |
+| `frontend/src/api/instruments.ts` | `fetchInstruments`, `fetchInstrument` |
+| `frontend/src/components/terminal/StockSelector.tsx` | search + dropdown, keyboard navigable |
+| `frontend/src/hooks/useLivePrice.ts` | takes a `symbol`; re-subscribes on the **same** socket |
+| `frontend/src/hooks/useAccount.ts` | takes a `symbol`; refetches on change |
+| `frontend/src/hooks/useIndicators.ts` | takes a `symbol` |
+| `Terminal.tsx` | owns the selected instrument; no page reload on switch |
+
+The stock list is **never** hard-coded in React — it comes from
+`GET /instruments`.

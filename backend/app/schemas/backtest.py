@@ -34,6 +34,10 @@ class BacktestRequest(BaseModel):
         default_factory=dict, description="Strategy parameters; defaults fill the rest."
     )
 
+    symbol: str | None = Field(
+        default=None,
+        description="Instrument to backtest. Defaults to the configured default.",
+    )
     interval: Interval = Interval.ONE_DAY
     limit: int = Field(default=500, ge=10, le=5000, description="Candles to run over.")
     start: datetime | None = None

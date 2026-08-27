@@ -56,7 +56,11 @@ class Settings(BaseSettings):
     )
 
     # --- Domain constants ------------------------------------------------
-    # The platform is deliberately single-instrument and single-wallet.
+    # The platform trades any instrument in the supported universe (see
+    # app/market_data/instruments.py) against ONE virtual wallet.
+    #
+    # TRADING_SYMBOL is the DEFAULT instrument -- what a request that omits a
+    # symbol resolves to, and what the UI opens on. It is not a restriction.
     TRADING_SYMBOL: str = "RELIANCE"
     TRADING_EXCHANGE: str = "NSE"
 

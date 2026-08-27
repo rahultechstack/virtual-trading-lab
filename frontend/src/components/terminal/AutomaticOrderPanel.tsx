@@ -21,6 +21,8 @@ const CONDITIONS: TriggerCondition[] = ['LTE', 'GTE'];
 const ACTIONS: OrderSide[] = ['BUY', 'SELL', 'SHORT_SELL', 'BUY_TO_COVER'];
 
 interface Props {
+  /** Instrument the trigger is created against. */
+  symbol: string | null;
   position: Position | null;
   /** Live price, sent so the backend can reject a stop that fires instantly. */
   referencePrice: string | null;
@@ -43,6 +45,7 @@ interface Props {
  * never evaluates a price against a trigger.
  */
 export function AutomaticOrderPanel({
+  symbol,
   position,
   referencePrice,
   disabled = false,
@@ -118,6 +121,7 @@ export function AutomaticOrderPanel({
         action,
         quantity,
         reference_price: referencePrice,
+        ...(symbol ? { symbol } : {}),
       });
       setNotice(
         `${TYPE_LABELS[created.order_type]} armed: ${SIDE_LABELS[created.action]} ` +
@@ -277,6 +281,7 @@ export function AutomaticOrderPanel({
             <table className="table">
               <thead>
                 <tr>
+                  <th>Symbol</th>
                   <th>Type</th>
                   <th>Condition</th>
                   <th className="numeric">Trigger</th>
@@ -290,6 +295,9 @@ export function AutomaticOrderPanel({
               <tbody>
                 {orders.map((order) => (
                   <tr key={order.id}>
+                    <td>
+                      <strong>{order.symbol}</strong>
+                    </td>
                     <td>{TYPE_LABELS[order.order_type]}</td>
                     <td className="muted">
                       {CONDITION_LABELS[order.trigger_condition]}

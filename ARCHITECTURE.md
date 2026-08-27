@@ -3663,3 +3663,180 @@ terminal rather than retried.
 **Do not** add execution logic to `app/automation/`. Firing decides *whether*;
 `TradingEngine` decides *what happens*. Keeping that split is what guarantees
 automatic and manual orders are accounted identically.
+
+---
+
+## 19. Multi-Instrument Architecture
+
+Supersedes the single-instrument assumption described earlier in this document.
+The platform now trades **any instrument in the supported universe** against
+**one** virtual wallet.
+
+### 19.1 The one gate, in one place
+
+```
+app/market_data/instruments.py
+    Instrument            symbol, company_name, exchange, instrument_type
+    NSE_INSTRUMENTS       the curated catalogue (50 NSE large caps)
+    InstrumentRegistry    all() / get() / search() / verify()
+    resolve_instrument()  <-- THE single validation point
+    resolve_symbol()
+             |
+   +---------+----------+--------------------+
+   |                    |                    |
+TradingEngine    MarketDataService    AutomaticOrderService
+._resolve_symbol ._require_supported_ ._resolve_symbol
+                  symbol
+```
+
+Before: three separate `if symbol != settings.TRADING_SYMBOL: raise` checks.
+After: all three delegate to `resolve_instrument()`, so they cannot disagree
+about what is tradable. `settings.TRADING_SYMBOL` is now the **default**
+instrument (what a request that omits a symbol resolves to), not a restriction.
+
+### 19.2 Instrument model and discovery
+
+```python
+@dataclass(frozen=True)
+class Instrument:
+    symbol: str            # "TCS"
+    company_name: str      # "Tata Consultancy Services"
+    exchange: str          # "NSE"
+    instrument_type: InstrumentType   # EQUITY
+```
+
+`data_available` is deliberately **not** a field: availability is a property of
+the *provider*, not of the listing, so it is resolved per request by
+`InstrumentRegistry.verify(symbol, provider)` and cached per process (one
+upstream probe per symbol, ever).
+
+**Why a curated catalogue rather than the full NSE master list.** The
+configured provider (Yahoo) has no instrument-discovery endpoint — there is
+nothing to enumerate. Listing all ~2,000 NSE symbols would advertise
+instruments the feed cannot serve, which the brief rules out. The catalogue
+holds 50 liquid NSE names Yahoo does serve; `GET /instruments/{symbol}`
+verifies any one of them against the live feed.
+
+Search ranks exact symbol > symbol prefix > name prefix > symbol substring >
+name substring, so "TCS" returns Tata Consultancy first.
+
+### 19.3 Multi-stock portfolio
+
+One wallet, many positions. `positions` was already keyed by `symbol`, so no
+schema change was needed there.
+
+```
+app/trading/portfolio.py
+    value_portfolio(wallet, positions, mark_prices) -> PortfolioValuation
+        pure: rows + a price map -> totals + per-symbol breakdown
+        an open position with no mark contributes ZERO and is named in
+        `unpriced_symbols` -- never guessed at
+```
+
+`TradingEngine.get_portfolio_summary(mark_prices=...)` exposes it;
+`GET /trading/portfolio/summary?marks=RELIANCE:1400,TCS:3200` is the transport.
+The older single-symbol `GET /trading/portfolio` is unchanged and still works.
+
+### 19.4 Snapshots
+
+`portfolio_snapshots.symbol` became **nullable** (migration `9f2b6c31ae74`).
+A snapshot now describes the whole account:
+
+| Column | Multi-stock meaning |
+| ------ | ------------------- |
+| `cash`, `position_value`, `total_value`, `realized_pnl`, `total_charges`, `unrealized_pnl`, `net_pnl` | **summed across every instrument** |
+| `symbol`, `quantity`, `average_price`, `mark_price` | the position only when **exactly one** is open; NULL/0 otherwise |
+
+That keeps existing single-stock history readable and correct while making the
+equity curve right for a multi-stock account.
+
+### 19.5 WebSocket symbol subscriptions
+
+```
+client                          server
+  |-- connect ------------------>| subscribe to the default instrument
+  |<-- status -------------------|
+  |<-- subscription {symbols} ---|
+  |<-- tick (that symbol only) --|
+  |
+  |-- {"type":"subscribe","symbol":"TCS"} -->|  REPLACES the subscription
+  |<-- subscription {["TCS"]} ---|
+  |<-- cached TCS tick ----------|  immediate, no wait for the next poll
+  |<-- tick TCS -----------------|
+```
+
+* `ConnectionManager` keeps `dict[WebSocket, set[str]]`. A socket with an
+  **empty** set receives everything — that keeps a bare client working.
+* `set_subscription()` **replaces** rather than adds, so browsing several
+  stocks never accumulates subscriptions and upstream polls.
+* `PriceStreamService.symbols_to_poll()` returns exactly the union of what
+  clients want, so nothing is fetched for an instrument nobody is watching.
+* `last_tick` became `last_ticks: dict[symbol, payload]`; `last_tick` survives
+  as a property returning the default instrument's, so the snapshot scheduler
+  and stop-loss reference price keep working.
+* The client guards against a stale tick arriving in the gap between switching
+  and the server acknowledging.
+
+### 19.6 Database location and reset
+
+**The database now lives inside the project**, not in a Docker-managed volume:
+
+```
+virtual-trading-lab/
+└── data/
+    └── postgres/          <- PostgreSQL data directory (bind-mounted)
+```
+
+`docker-compose.yml` mounts `./data/postgres:/var/lib/postgresql/data`. The
+named volume `vtrader_postgres_data` is gone.
+
+| Action | Effect |
+| ------ | ------ |
+| `docker compose down` / `restart` / `rmi` | history preserved |
+| **`rm -rf data/postgres`** | **complete reset** — fresh wallet, no trades, positions or history |
+
+`data/postgres/` and `data/*.sql` are gitignored.
+
+**Why not SQLite** (the brief asked for the reason before changing):
+
+| Blocker | Detail |
+| ------- | ------ |
+| Row locking | 5 uses of `SELECT ... FOR UPDATE`, one with `SKIP LOCKED`. SQLite has neither; SQLAlchemy silently ignores them. That is the mechanism preventing duplicate automatic-order execution. |
+| Money precision | 9 `NUMERIC(18,2)` columns. SQLAlchemy's SQLite dialect stores `Numeric` via **float** and warns. Every price, charge and P&L would round through binary floating point — the exact failure the codebase is built to avoid. |
+| Native enums | 7 PostgreSQL enum types. All 6 migrations create and drop them explicitly. |
+| Migrations | All 6 would need rewriting; `TRUNCATE ... RESTART IDENTITY CASCADE` in the test fixtures is Postgres-only. |
+
+The actual requirement — *the database physically lives in the project root and
+deleting it resets everything* — is fully met by the bind-mount, with none of
+that risk. Verified working on Windows Docker Desktop.
+
+### 19.7 How to change or add a market-data provider
+
+Unchanged from §15.12: one module in `app/market_data/` subclassing
+`MarketDataProvider`, one `_PROVIDERS` entry. Nothing about multi-instrument
+changes that — the provider already received `(symbol, exchange)` on every call.
+
+### 19.8 How to support another exchange
+
+1. Add instruments to `NSE_INSTRUMENTS` (or a new tuple) in
+   `app/market_data/instruments.py` with the right `exchange` code.
+2. Add the vendor suffix to `_EXCHANGE_SUFFIX` in `app/market_data/yahoo.py`
+   (`NSE -> .NS`, `BSE -> .BO` already exist).
+3. If the charge schedule differs, extend `FeeCalculator` — the Indian
+   statutory charges in `app/trading/fees.py` assume NSE/BSE cash segment.
+4. Check `SESSION_TIMEZONE` in `app/indicators/library.py`, which anchors
+   intraday VWAP to `Asia/Kolkata`.
+
+The exchange is carried on every `Order`, `Trade`, `Position` and
+`AutomaticOrder` row and is taken from the instrument, not from a global
+constant.
+
+### 19.9 Known limitations
+
+* **The catalogue is curated, not exhaustive.** 50 NSE symbols. Adding more is
+  one line each; discovering all of NSE automatically needs a provider with an
+  instrument endpoint.
+* **`PerformanceAnalyzer` aggregates across all symbols** with no per-symbol
+  filter. Correct as a total, but there is no per-stock performance page.
+* **One wallet, no per-stock cash segregation** — by design.
+* **Backtests run one instrument at a time** (`BacktestRequest.symbol`).

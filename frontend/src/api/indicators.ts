@@ -10,6 +10,7 @@ export function fetchIndicators(
   interval: Interval,
   limit: number,
   specs: string[],
+  symbol?: string | null,
   signal?: AbortSignal,
 ): Promise<IndicatorSet> {
   const query = new URLSearchParams({
@@ -17,5 +18,6 @@ export function fetchIndicators(
     limit: String(limit),
     indicators: specs.join(','),
   });
+  if (symbol) query.set('symbol', symbol);
   return apiGet<IndicatorSet>(`/indicators?${query.toString()}`, signal);
 }

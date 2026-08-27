@@ -64,6 +64,10 @@ async def compute_indicators(
     ] = 250,
     start: Annotated[datetime | None, Query(description="Window start.")] = None,
     end: Annotated[datetime | None, Query(description="Window end.")] = None,
+    symbol: Annotated[
+        str | None,
+        Query(description="Instrument. Defaults to the configured default."),
+    ] = None,
 ) -> IndicatorSetResponse:
     """Compute the requested studies from real candle data.
 
@@ -75,7 +79,7 @@ async def compute_indicators(
     specs = parse_specs(indicators)
 
     series = await service.get_historical_candles(
-        interval=interval, start=start, end=end, limit=limit
+        interval=interval, start=start, end=end, limit=limit, symbol=symbol
     )
 
     results = indicator_service.calculate(

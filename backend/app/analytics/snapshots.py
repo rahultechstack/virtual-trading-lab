@@ -18,7 +18,8 @@ from app.core.logging import get_logger
 from app.models.portfolio_snapshot import PortfolioSnapshot, SnapshotSource
 from app.models.trading import Position
 from app.repositories.wallet_repository import WalletRepository
-from app.trading.pnl import PnLCalculator, to_money
+from app.trading.pnl import to_money
+from app.trading.portfolio import value_portfolio
 
 logger = get_logger(__name__)
 
@@ -36,21 +37,37 @@ class SnapshotService:
         self,
         *,
         mark_price: Decimal | None = None,
+        mark_prices: dict[str, Decimal] | None = None,
+        symbol: str | None = None,
         source: SnapshotSource = SnapshotSource.MANUAL,
         skip_if_unchanged: bool = False,
         commit: bool = True,
     ) -> PortfolioSnapshot | None:
-        """Record the account's current value.
+        """Record the whole account's value across every instrument held.
 
         Args:
-            mark_price: Price to value an open position at. Ignored when flat.
-            source: Why the snapshot is being taken.
-            skip_if_unchanged: Return ``None`` instead of writing a row
-                identical to the previous one. Used by the periodic job so an
-                idle account does not accumulate duplicates.
-            commit: Set False to enrol in the caller's transaction -- the
-                trading engine writes its snapshot inside the order's own
-                transaction so the two can never disagree.
+            mark_prices: symbol -> price. The general form for a multi-stock
+                portfolio.
+            mark_price: convenience for one instrument; applied to ``symbol``,
+                or to the default instrument when that is omitted. Ignored when
+                ``mark_prices`` is supplied.
+            symbol: which instrument ``mark_price`` refers to.
+            source: why the snapshot is being taken.
+            skip_if_unchanged: return ``None`` instead of writing a row
+                identical to the previous one, so an idle account does not
+                accumulate duplicates.
+            commit: False to enrol in the caller's transaction -- the trading
+                engine writes its snapshot inside the order's own transaction
+                so the two can never disagree.
+
+        Cash and every P&L figure are summed across **all** instruments. An
+        open position with no mark price contributes zero, the same rule the
+        rest of the engine follows: prices are supplied, never fetched.
+
+        ``symbol``/``quantity``/``average_price``/``mark_price`` on the row
+        describe the position only when exactly one is open; with none or
+        several they are null/zero, because no single symbol describes a
+        portfolio.
 
         Returns the snapshot, or ``None`` when it was suppressed as unchanged.
         """
@@ -58,49 +75,34 @@ class SnapshotService:
         if wallet is None:
             raise WalletNotFoundError()
 
-        position = (
-            await self._session.execute(
-                select(Position).where(Position.symbol == settings.TRADING_SYMBOL)
-            )
-        ).scalar_one_or_none()
+        marks = dict(mark_prices or {})
+        if not marks and mark_price is not None:
+            marks[(symbol or settings.TRADING_SYMBOL).upper()] = mark_price
 
-        quantity = position.quantity if position else 0
-        average_price = position.average_price if position else Decimal("0.0000")
-        realized = position.realized_pnl if position else Decimal("0.00")
-        charges = position.total_charges if position else Decimal("0.00")
+        positions = list(
+            (await self._session.execute(select(Position))).scalars().all()
+        )
+        valuation = value_portfolio(
+            wallet=wallet, positions=positions, mark_prices=marks
+        )
 
-        # A flat position needs no mark: there is nothing to value.
-        effective_mark = mark_price if quantity != 0 else None
-
-        if effective_mark is None:
-            unrealized = Decimal("0.00")
-            position_value = Decimal("0.00")
-        else:
-            unrealized = PnLCalculator.unrealized_pnl(
-                quantity=quantity,
-                average_price=average_price,
-                mark_price=effective_mark,
-            )
-            position_value = PnLCalculator.position_value(
-                quantity=quantity, mark_price=effective_mark
-            )
-
-        net_realized = to_money(realized - charges)
+        open_positions = [p for p in valuation.positions if p.quantity != 0]
+        single = open_positions[0] if len(open_positions) == 1 else None
 
         snapshot = PortfolioSnapshot(
             captured_at=datetime.now(tz=UTC),
             source=source,
-            symbol=settings.TRADING_SYMBOL,
-            quantity=quantity,
-            average_price=average_price,
-            mark_price=effective_mark,
-            cash=wallet.cash_balance,
-            position_value=position_value,
-            total_value=to_money(wallet.cash_balance + position_value),
-            realized_pnl=realized,
-            total_charges=charges,
-            unrealized_pnl=unrealized,
-            net_pnl=to_money(net_realized + unrealized),
+            symbol=single.symbol if single else None,
+            quantity=single.quantity if single else 0,
+            average_price=single.average_price if single else Decimal("0.0000"),
+            mark_price=single.mark_price if single else None,
+            cash=valuation.cash_balance,
+            position_value=valuation.position_value,
+            total_value=to_money(valuation.cash_balance + valuation.position_value),
+            realized_pnl=valuation.realized_pnl,
+            total_charges=valuation.total_charges,
+            unrealized_pnl=valuation.unrealized_pnl,
+            net_pnl=to_money(valuation.net_realized_pnl + valuation.unrealized_pnl),
         )
 
         if skip_if_unchanged:

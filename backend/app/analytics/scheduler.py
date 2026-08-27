@@ -30,50 +30,67 @@ _JOB_ID = "portfolio-snapshot"
 _scheduler: AsyncIOScheduler | None = None
 
 
-async def _current_mark_price() -> Decimal | None:
-    """Latest price, reusing the stream's tick when it is recent enough."""
+async def _mark_prices_for(symbols: list[str]) -> dict[str, Decimal]:
+    """Latest price for each held instrument.
+
+    The live stream's most recent tick is reused when it is fresh and is for one
+    of the held symbols, so the common single-instrument case still costs no
+    upstream call. Everything else is fetched per symbol.
+    """
+    from app.market_data.instruments import instrument_registry
+    from app.market_data.registry import get_provider
     from app.realtime.price_stream import get_price_stream
 
-    stream = get_price_stream()
-    tick = stream.last_tick
+    marks: dict[str, Decimal] = {}
+    tick = get_price_stream().last_tick
 
     if tick is not None:
-        server_time = tick["data"].get("server_time")
+        data = tick["data"]
         try:
             age = (
-                datetime.now(tz=UTC) - datetime.fromisoformat(server_time)
+                datetime.now(tz=UTC)
+                - datetime.fromisoformat(data.get("server_time"))
             ).total_seconds()
         except (TypeError, ValueError):
             age = None
-
+        symbol = str(data.get("symbol", "")).upper()
         if age is not None and age <= settings.SNAPSHOT_INTERVAL_SECONDS:
-            return Decimal(tick["data"]["last_price"])
+            if symbol in symbols:
+                marks[symbol] = Decimal(data["last_price"])
 
-    from app.market_data.registry import get_provider
+    provider = get_provider()
+    for symbol in symbols:
+        if symbol in marks:
+            continue
+        instrument = instrument_registry.get(symbol)
+        if instrument is None:
+            continue
+        try:
+            quote = await provider.get_current_quote(
+                instrument.symbol, instrument.exchange
+            )
+        except Exception as exc:  # noqa: BLE001 - one bad symbol must not stop the job
+            logger.debug("Could not mark %s: %s", symbol, exc)
+            continue
+        marks[symbol] = quote.last_price
 
-    quote = await get_provider().get_current_quote(
-        settings.TRADING_SYMBOL, settings.TRADING_EXCHANGE
-    )
-    return quote.last_price
+    return marks
 
 
 async def capture_periodic_snapshot() -> None:
     """One scheduled capture. Never raises -- the scheduler must keep running."""
     try:
         async with SessionLocal() as session:
-            position = (
-                await session.execute(
-                    select(Position).where(Position.symbol == settings.TRADING_SYMBOL)
-                )
-            ).scalar_one_or_none()
+            positions = list(
+                (await session.execute(select(Position))).scalars().all()
+            )
+            held = [p.symbol.upper() for p in positions if p.quantity != 0]
 
-            # Only pay for a price when there is a position to value.
-            mark_price = None
-            if position is not None and position.quantity != 0:
-                mark_price = await _current_mark_price()
+            # Only pay for prices when there is something to value.
+            marks = await _mark_prices_for(held) if held else {}
 
             snapshot = await SnapshotService(session).capture(
-                mark_price=mark_price,
+                mark_prices=marks,
                 source=SnapshotSource.PERIODIC,
                 skip_if_unchanged=settings.SNAPSHOT_SKIP_UNCHANGED,
             )

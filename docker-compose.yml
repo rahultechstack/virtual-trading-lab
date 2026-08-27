@@ -6,6 +6,9 @@
 #
 #   docker compose up -d --build      start everything
 #   docker compose up -d postgres     database only (run app code on the host)
+#
+# Persistence: PostgreSQL stores its data in ./data/postgres inside this
+# project. Delete that directory to reset the application completely.
 # ---------------------------------------------------------------------------
 services:
   postgres:
@@ -22,7 +25,10 @@ services:
     ports:
       - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      # The database lives INSIDE the project, not in a Docker-managed volume
+      # somewhere under /var/lib/docker. `rm -rf data/postgres` is a full reset:
+      # fresh wallet, no trades, no positions, no history.
+      - ./data/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vtrader} -d ${POSTGRES_DB:-virtual_trading}"]
       interval: 5s
@@ -94,7 +100,3 @@ services:
       - ./frontend/tsconfig.node.json:/app/tsconfig.node.json
     depends_on:
       - backend
-
-volumes:
-  postgres_data:
-    name: vtrader_postgres_data

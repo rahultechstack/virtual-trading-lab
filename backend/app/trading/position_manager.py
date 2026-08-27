@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
+from app.market_data.instruments import resolve_instrument
 from app.models.trading import Position
 from app.trading.pnl import PnLCalculator, to_money
 
@@ -150,7 +150,7 @@ class PositionManager:
 
         position = Position(
             symbol=symbol,
-            exchange=settings.TRADING_EXCHANGE,
+            exchange=resolve_instrument(symbol).exchange,
             quantity=0,
             average_price=Decimal("0.0000"),
             realized_pnl=Decimal("0.00"),

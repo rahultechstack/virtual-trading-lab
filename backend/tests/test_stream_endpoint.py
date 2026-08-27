@@ -112,7 +112,9 @@ def test_a_late_joiner_gets_the_last_known_price_immediately(client):
 
         with client.websocket_connect(WS_URL) as second:
             assert second.receive_json()["type"] == "status"
-            # No waiting for the next interval.
+            # Then the subscription confirmation for the default instrument,
+            # and the cached tick -- no waiting for the next interval.
+            assert second.receive_json()["type"] == "subscription"
             assert second.receive_json()["type"] == "tick"
 
 
