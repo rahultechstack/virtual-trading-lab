@@ -1,7 +1,48 @@
 """Application configuration.
 
-Single source of truth for every runtime setting. Nothing else in the codebase
-reads ``os.environ`` directly.
+**Single source of truth for every runtime setting.** Nothing else in the
+codebase reads ``os.environ``, and nothing hard-codes a value a deployment
+might reasonably want to change.
+
+Every field below is overridable from ``backend/.env`` (or a real environment
+variable) using the same name. See ``CONFIGURATION.md`` at the repository root
+for a plain-English guide to what each one does.
+
+Sections, in order:
+
+===========================  ==================================================
+ Section                      What lives here
+===========================  ==================================================
+ Application                  name, version, environment, API prefix
+ Server                       bind host and port
+ Database                     connection and pooling
+ CORS                         which origins the browser may call from
+ Feature flags                on/off switches, all in one place
+ Default instrument           what the platform opens on
+ Market hours                 NSE session times and the holiday list
+ Market data                  provider selection, API URLs, credentials
+ Mock provider                simulated-feed parameters
+ Portfolio snapshots          equity-curve capture cadence
+ Real-time streaming          poll interval, connection cap
+ Execution realism            spread and slippage models
+ Charges: equities            Indian statutory + broker charges
+ Charges: crypto              simulated exchange fee, GST, TDS
+ Wallet                       opening balance and currency
+ Limits                       order size, page sizes, request caps
+ Indicators                   VWAP session anchor, per-request cap
+===========================  ==================================================
+
+**What is NOT here, deliberately.** Structural facts that cannot be changed by
+configuration alone are kept next to the code that defines them, each with a
+comment saying so:
+
+* column precision (``MONEY``, ``QUANTITY``) in ``app/models/`` -- changing it
+  needs a migration;
+* the supported instrument catalogue in ``app/market_data/catalogue.py`` --
+  it is data, not a scalar, so it lives in its own file;
+* vendor protocol details (symbol suffixes, interval names) in each provider;
+* the asset-class dispatch tables (calendars, providers, fee schedules), which
+  are the documented extension points for adding an asset class.
 """
 
 import json
@@ -55,24 +96,47 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://localhost:5173"]
     )
 
-    # --- Domain constants ------------------------------------------------
-    # The platform trades any instrument in the supported universe (see
-    # app/market_data/instruments.py) against ONE virtual wallet.
+    # =====================================================================
+    # FEATURE FLAGS
+    # =====================================================================
+    # Every on/off switch in the platform, in one place. Each is also
+    # documented in its own section below, next to the values it governs.
+
+    #: Apply brokerage and statutory charges. Off = frictionless simulation.
+    CHARGES_ENABLED: bool = True
+    #: Refuse orders while the instrument's market is closed. Off by default:
+    #: this is a paper-trading lab. Crypto is unaffected -- it never closes.
+    ENFORCE_MARKET_HOURS: bool = False
+    #: Capture portfolio snapshots on a timer, for the equity curve.
+    SNAPSHOT_ENABLED: bool = True
+    #: Also snapshot inside each order's transaction.
+    SNAPSHOT_ON_TRADE: bool = True
+    #: Suppress a periodic snapshot identical to the previous one.
+    SNAPSHOT_SKIP_UNCHANGED: bool = True
+    #: Derive bid/ask from the spread model when the feed has no depth.
+    #: Ticks label these "modelled" so they are never mistaken for real.
+    STREAM_MODEL_BID_ASK: bool = True
+    #: Keep polling an instrument that has an ACTIVE automatic order even when
+    #: no browser is connected, so a stop-loss can fire overnight.
+    STREAM_POLL_FOR_AUTOMATION: bool = True
+
+    # --- Default instrument ------------------------------------------------
+    # The platform trades any instrument in the supported universe -- the
+    # catalogue is in app/market_data/catalogue.py -- against ONE virtual
+    # wallet.
     #
-    # TRADING_SYMBOL is the DEFAULT instrument -- what a request that omits a
-    # symbol resolves to, and what the UI opens on. It is not a restriction.
+    # TRADING_SYMBOL is the DEFAULT instrument: what a request that omits a
+    # symbol resolves to, and what the UI opens on. It is NOT a restriction.
     TRADING_SYMBOL: str = "RELIANCE"
     TRADING_EXCHANGE: str = "NSE"
 
     # --- Market hours ------------------------------------------------------
-    # Whether the trading engine REFUSES an order while the instrument's
-    # market is closed. Off by default: this is a paper-trading lab and being
-    # able to place a practice order at 9pm is the point. Turn it on to
-    # simulate a real broker.
+    # Whether a closed market actually BLOCKS an order is ENFORCE_MARKET_HOURS,
+    # in the feature-flags block above. The schedule below is always resolved
+    # and reported regardless.
     #
-    # Crypto is unaffected either way -- its calendar is open 24/7, so the
+    # Crypto never consults any of this: its calendar is open 24/7, so the
     # check passes at any hour, on any day, including NSE holidays.
-    ENFORCE_MARKET_HOURS: bool = False
 
     # NSE cash-market session, in NSE_TIMEZONE. Pre-open (09:00-09:15) is a
     # call auction and is NOT continuous trading, so it is reported as
@@ -112,6 +176,15 @@ class Settings(BaseSettings):
     CRYPTO_MARKET_DATA_PROVIDER: str = "yahoo_crypto"
     MARKET_DATA_TIMEOUT_SECONDS: float = 15.0
 
+    # Upstream endpoint for the bundled Yahoo-backed providers (both the
+    # equity and the crypto one -- they share a transport). Point this at a
+    # mirror or a recording proxy without touching any code.
+    MARKET_DATA_BASE_URL: str = "https://query1.finance.yahoo.com/v8/finance/chart"
+    # Yahoo rejects requests without a browser-like agent.
+    MARKET_DATA_USER_AGENT: str = (
+        "Mozilla/5.0 (compatible; VirtualTradingPlatform/0.1)"
+    )
+
     # Quote currency for crypto pairs. The provider is asked for
     # <SYMBOL>-<CRYPTO_QUOTE_CURRENCY>, so INR keeps one currency across the
     # whole portfolio and no FX conversion is ever needed.
@@ -120,31 +193,33 @@ class Settings(BaseSettings):
     # Credentials for providers that need them. SecretStr keeps the value out
     # of logs, tracebacks and repr output. NEVER hard-code a key here - set it
     # in .env, which is gitignored.
+    #
+    # NOTE: none of the bundled providers read these -- Yahoo's chart endpoint
+    # is keyless. They exist as the ready-made seam for a provider that does
+    # need credentials, so adding one is a config change rather than a schema
+    # change. Read them in your provider's factory in
+    # app/market_data/registry.py.
     MARKET_DATA_API_KEY: SecretStr | None = None
     MARKET_DATA_API_SECRET: SecretStr | None = None
 
     # --- Portfolio snapshots ----------------------------------------------
-    SNAPSHOT_ENABLED: bool = True
+    # SNAPSHOT_ENABLED / _ON_TRADE / _SKIP_UNCHANGED are in the feature-flags
+    # block above.
     SNAPSHOT_INTERVAL_SECONDS: float = 300.0
-    # Also snapshot inside each order's transaction, so the equity curve has
-    # an exact point at every moment the account actually changed.
-    SNAPSHOT_ON_TRADE: bool = True
-    # Suppress a periodic row identical to the previous one, so an idle
-    # account does not fill the table overnight.
-    SNAPSHOT_SKIP_UNCHANGED: bool = True
 
     # --- Real-time streaming ----------------------------------------------
+    # STREAM_MODEL_BID_ASK and STREAM_POLL_FOR_AUTOMATION are in the
+    # feature-flags block above.
+    #
+    # How often the backend asks the provider for a price. This is the real
+    # meaning of "live" for a polled feed -- see ARCHITECTURE.md.
     STREAM_POLL_INTERVAL_SECONDS: float = 5.0
     STREAM_MAX_CONNECTIONS: int = 50
-    # Keep polling an instrument that has an ACTIVE automatic order even when
-    # no browser is connected. Without this a stop-loss only fires while a tab
-    # is open, which defeats the purpose of a 24/7 market: a crypto stop set on
-    # Friday would sit inert all weekend. With nothing armed and nobody
-    # watching, nothing is polled either way.
-    STREAM_POLL_FOR_AUTOMATION: bool = True
-    # Derive bid/ask from the spread model when the provider has no depth.
-    # Ticks label these as "modelled" so they are never mistaken for real.
-    STREAM_MODEL_BID_ASK: bool = True
+    # How often the automatic-order monitor re-reads which symbols are armed,
+    # measured in evaluations. Guards against a trigger inserted outside this
+    # process (psql, a second worker) never being noticed. Creating or
+    # cancelling an order through the API invalidates the cache immediately.
+    AUTOMATION_REVALIDATE_EVERY_EVALUATIONS: int = 20
 
     # --- Mock provider (MARKET_DATA_PROVIDER=mock) -------------------------
     # Simulated data for development. Never enable this in production.
@@ -168,10 +243,10 @@ class Settings(BaseSettings):
     SLIPPAGE_BPS: Decimal = Decimal("2")
     SLIPPAGE_PERCENT: Decimal = Decimal("0")
 
-    # --- Charges ----------------------------------------------------------
-    # Master switch; turn off for frictionless simulation.
-    CHARGES_ENABLED: bool = True
-
+    # --- Charges: equities (AssetClass.STOCK) -------------------------------
+    # Governed by CHARGES_ENABLED in the feature-flags block above.
+    # Applied by FeeCalculator in app/trading/fees.py.
+    #
     # Rates are PERCENTAGES of turnover (0.03 means 0.03%).
     # These defaults reflect a typical NSE discount broker. Statutory rates
     # are revised periodically - verify against a current schedule.
@@ -190,7 +265,7 @@ class Settings(BaseSettings):
     GST_PERCENT: Decimal = Decimal("18")
     DP_CHARGES_PER_SELL: Decimal = Decimal("0")
 
-    # --- Crypto charges ----------------------------------------------------
+    # --- Charges: crypto (AssetClass.CRYPTO) --------------------------------
     # SIMULATED. No crypto exchange has been integrated, so these are
     # deliberately CONFIGURABLE ASSUMPTIONS rather than any real venue's
     # published schedule. Change them to match whichever exchange you want to
@@ -216,6 +291,44 @@ class Settings(BaseSettings):
     # Decimal (never float) because this is money.
     WALLET_INITIAL_BALANCE: Decimal = Decimal("1000000.00")
     WALLET_CURRENCY: str = "INR"
+
+    # =====================================================================
+    # LIMITS
+    # =====================================================================
+    # Bounds the platform enforces on requests. Every validation path reads
+    # these -- there are no duplicate literals in the schemas or endpoints.
+
+    #: Largest quantity a single order may be for, in the instrument's own
+    #: units. Applies to manual orders and automatic ones alike.
+    #:
+    #: NOTE: the database CHECK constraint carries its own ceiling
+    #: (``DB_MAX_ORDER_QUANTITY`` in app/models/trading.py). Lowering this
+    #: setting works immediately; RAISING it above that ceiling needs a
+    #: migration, because the constraint is baked into the schema.
+    MAX_ORDER_QUANTITY: int = 10_000_000
+
+    #: Most candles any one market-data or backtest request may return.
+    MAX_CANDLES_PER_REQUEST: int = 5_000
+    #: Most rows a history listing (orders, trades, triggers) may return.
+    MAX_HISTORY_PAGE_SIZE: int = 500
+    #: Default page size when a listing request omits one.
+    DEFAULT_HISTORY_PAGE_SIZE: int = 100
+    #: Most portfolio snapshots one history request may return. Higher than a
+    #: normal page because the equity curve is plotted from it.
+    MAX_SNAPSHOT_PAGE_SIZE: int = 5_000
+
+    # --- Indicators --------------------------------------------------------
+    #: Most indicators one request may ask for. Each is a full pass over the
+    #: series, so this bounds the work a single call can cause.
+    MAX_INDICATORS_PER_REQUEST: int = 10
+    #: Timezone that anchors intraday VWAP to a trading session. Separate from
+    #: NSE_TIMEZONE on purpose: this is about where a *bar series* resets,
+    #: which need not be the exchange whose calendar governs trading.
+    VWAP_SESSION_TIMEZONE: str = "Asia/Kolkata"
+
+    #: How far ahead a market calendar searches for the next open or close
+    #: before giving up. Comfortably longer than any real exchange closure.
+    CALENDAR_SEARCH_HORIZON_DAYS: int = 30
 
     @field_validator("NSE_HOLIDAYS", mode="before")
     @classmethod

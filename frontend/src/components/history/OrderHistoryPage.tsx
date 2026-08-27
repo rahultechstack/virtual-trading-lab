@@ -2,10 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { PageShell } from './PageShell';
 import { fetchOrders } from '@/api/trading';
+import { HISTORY_PAGE_LIMIT as LIMIT } from '@/config/ui';
 import { SIDE_LABELS, isBullishSide, type Order, type OrderStatus } from '@/types/trading';
 import { formatDateTime, formatQuantity, formatRupees } from '@/utils/format';
-
-const LIMIT = 200;
 
 const STATUS_TONE: Record<OrderStatus, string> = {
   FILLED: 'ok',

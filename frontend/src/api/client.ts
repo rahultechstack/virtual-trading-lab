@@ -1,10 +1,14 @@
 /**
  * Thin HTTP transport shared by every endpoint module.
  * Components never call `fetch` directly - they go through `api/*` functions.
+ *
+ * Where the backend lives is NOT decided here. It comes from
+ * `@/config/api`, which is the one place to change it.
  */
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000';
-const V1_PREFIX = import.meta.env.VITE_API_V1_PREFIX ?? '/api/v1';
+import { API_BASE_URL, apiUrl, wsUrl } from '@/config/api';
+
+export { apiUrl, wsUrl };
 
 /** The error envelope the backend returns for domain failures. */
 interface ErrorEnvelope {
@@ -26,24 +30,6 @@ export class ApiError extends Error {
   get isNotFound(): boolean {
     return this.status === 404;
   }
-}
-
-export function apiUrl(path: string): string {
-  return `${BASE_URL}${V1_PREFIX}${path}`;
-}
-
-/**
- * Build a WebSocket URL for an API path.
- *
- * Derived from the HTTP base so there is one thing to configure, swapping the
- * scheme (https -> wss). `VITE_WS_BASE_URL` overrides it when the socket is
- * served from somewhere else entirely.
- */
-export function wsUrl(path: string): string {
-  const override = import.meta.env.VITE_WS_BASE_URL;
-  const base =
-    override && override.length > 0 ? override : BASE_URL.replace(/^http/, 'ws');
-  return `${base}${V1_PREFIX}${path}`;
 }
 
 /** Turn a non-2xx response into an ApiError, unwrapping the error envelope. */
@@ -79,7 +65,9 @@ async function request<T>(
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === 'AbortError') throw cause;
     // Network-level failure: backend down, wrong port, CORS rejection.
-    throw new ApiError(`Cannot reach the API at ${BASE_URL}. Is the backend running?`);
+    throw new ApiError(
+      `Cannot reach the API at ${API_BASE_URL}. Is the backend running?`,
+    );
   }
 
   if (!response.ok) {

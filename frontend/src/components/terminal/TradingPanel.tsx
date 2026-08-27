@@ -1,21 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { placeOrder } from '@/api/trading';
+import {
+  DEFAULT_FRACTIONAL_QUANTITY,
+  DEFAULT_WHOLE_QUANTITY,
+  FRACTIONAL_QUANTITY_PRESETS,
+  WHOLE_QUANTITY_PRESETS,
+} from '@/config/ui';
 import type { Instrument } from '@/types/instruments';
 import type { OrderResult, OrderSide, Position } from '@/types/trading';
 import { formatQuantity, formatRupees, toQuantity } from '@/utils/format';
-
-/** Quick sizes for a whole-unit instrument, e.g. an NSE equity. */
-const WHOLE_QUANTITIES = ['1', '10', '50', '100'];
-
-/**
- * Quick sizes for a fractional instrument.
- *
- * Deliberately expressed as *fractions of one unit* rather than a rupee value:
- * one BTC and one DOGE differ by seven orders of magnitude, so any fixed rupee
- * ladder would be useless for one of them.
- */
-const FRACTIONAL_QUANTITIES = ['0.001', '0.01', '0.1', '1'];
 
 const SIDES: ReadonlyArray<{
   side: OrderSide;
@@ -59,17 +53,21 @@ export function TradingPanel({
   const symbol = instrument?.symbol ?? null;
   const isFractional = instrument?.is_fractional ?? false;
 
-  const [quantity, setQuantity] = useState('10');
+  const [quantity, setQuantity] = useState(DEFAULT_WHOLE_QUANTITY);
   const [pending, setPending] = useState<OrderSide | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastFill, setLastFill] = useState<OrderResult | null>(null);
 
-  const quickSizes = isFractional ? FRACTIONAL_QUANTITIES : WHOLE_QUANTITIES;
+  const quickSizes = isFractional
+    ? FRACTIONAL_QUANTITY_PRESETS
+    : WHOLE_QUANTITY_PRESETS;
 
   // Switching between a share and a coin makes the old size meaningless --
   // 10 BTC is not a practice trade. Reset to a sensible default for the class.
   useEffect(() => {
-    setQuantity(isFractional ? '0.01' : '10');
+    setQuantity(
+      isFractional ? DEFAULT_FRACTIONAL_QUANTITY : DEFAULT_WHOLE_QUANTITY,
+    );
     setLastFill(null);
     setError(null);
   }, [isFractional, symbol]);

@@ -9,6 +9,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query
 
+from app.core.config import settings
 from app.market_data.instruments import (
     AssetClass,
     instrument_registry,
@@ -47,7 +48,7 @@ async def list_instruments(
         AssetClass | None,
         Query(description="Restrict to STOCK or CRYPTO. Omit for everything."),
     ] = None,
-    limit: Annotated[int, Query(ge=1, le=500)] = 50,
+    limit: Annotated[int, Query(ge=1, le=settings.MAX_HISTORY_PAGE_SIZE)] = 50,
 ) -> list[InstrumentResponse]:
     """The tradable universe, across every asset class.
 

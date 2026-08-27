@@ -16,6 +16,7 @@ from app.models.automatic_order import (
     AutomaticOrderType,
     TriggerCondition,
 )
+from app.core.config import settings
 from app.market_data.instruments import AssetClass
 from app.models.enums import OrderSide
 
@@ -48,7 +49,7 @@ class CreateAutomaticOrderRequest(BaseModel):
     )
     quantity: Decimal = Field(
         gt=0,
-        le=10_000_000,
+        le=settings.MAX_ORDER_QUANTITY,
         description=(
             "Positive size. Whole units for a stock; fractional for crypto. "
             'Send it as a string ("0.001") to avoid float rounding.'

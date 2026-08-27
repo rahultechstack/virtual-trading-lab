@@ -38,7 +38,7 @@ from app.models.automatic_order import (
     TriggerCondition,
 )
 from app.models.enums import OrderSide
-from app.models.trading import MAX_ORDER_QUANTITY, Position
+from app.models.trading import Position
 
 logger = get_logger(__name__)
 
@@ -165,9 +165,10 @@ class AutomaticOrderService:
         Positivity and step size are settled by ``normalise_quantity``, which
         knows the instrument; only the absolute bound and the price remain.
         """
-        if quantity > MAX_ORDER_QUANTITY:
+        if quantity > settings.MAX_ORDER_QUANTITY:
             raise InvalidAutomaticOrderError(
-                f"Quantity {quantity} exceeds the maximum of {MAX_ORDER_QUANTITY}."
+                f"Quantity {quantity} exceeds the maximum of "
+                f"{settings.MAX_ORDER_QUANTITY}."
             )
         if trigger_price <= 0:
             raise InvalidAutomaticOrderError(

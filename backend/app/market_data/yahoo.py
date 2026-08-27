@@ -34,6 +34,7 @@ from decimal import Decimal
 
 import httpx
 
+from app.core.config import settings
 from app.core.exceptions import (
     MarketDataUnavailableError,
     UnsupportedIntervalError,
@@ -44,10 +45,11 @@ from app.schemas.market_data import Candle, Interval, ProviderCapabilities, Quot
 
 logger = get_logger(__name__)
 
-_BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart"
-
-# Yahoo rejects requests without a browser-like agent.
-_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; VirtualTradingPlatform/0.1)"}
+#: Vendor protocol details. These describe how to *speak to Yahoo*, not how
+#: this platform is configured, so they live beside the client rather than in
+#: settings -- changing one means changing the integration, not a deployment.
+#: The endpoint itself IS configurable (``MARKET_DATA_BASE_URL``), so a mirror
+#: or a recording proxy needs no code change.
 
 #: Platform exchange code -> Yahoo symbol suffix.
 _EXCHANGE_SUFFIX = {"NSE": ".NS", "BSE": ".BO"}
@@ -104,9 +106,22 @@ class YahooChartProvider(MarketDataProvider):
     #: Fallback currency when the payload omits one.
     default_currency = "INR"
 
-    def __init__(self, timeout_seconds: float = 15.0) -> None:
+    def __init__(
+        self,
+        timeout_seconds: float | None = None,
+        base_url: str | None = None,
+        user_agent: str | None = None,
+    ) -> None:
+        # Every argument falls back to settings, so a caller that passes
+        # nothing gets exactly the configured behaviour.
         self._client = httpx.AsyncClient(
-            base_url=_BASE_URL, headers=_HEADERS, timeout=timeout_seconds
+            base_url=base_url or settings.MARKET_DATA_BASE_URL,
+            headers={"User-Agent": user_agent or settings.MARKET_DATA_USER_AGENT},
+            timeout=(
+                timeout_seconds
+                if timeout_seconds is not None
+                else settings.MARKET_DATA_TIMEOUT_SECONDS
+            ),
         )
 
     # -- vendor mapping (subclass responsibility) -------------------------

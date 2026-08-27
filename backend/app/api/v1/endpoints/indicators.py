@@ -9,6 +9,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
+from app.core.config import settings
 from app.api.v1.endpoints.market_data import get_market_data_service
 from app.indicators.definitions import parse_specs
 from app.indicators.service import indicator_service
@@ -60,7 +61,12 @@ async def compute_indicators(
     ],
     interval: Annotated[Interval, Query(description="Candle size.")] = Interval.ONE_DAY,
     limit: Annotated[
-        int, Query(ge=2, le=5000, description="How many candles to compute over.")
+        int,
+        Query(
+            ge=2,
+            le=settings.MAX_CANDLES_PER_REQUEST,
+            description="How many candles to compute over.",
+        ),
     ] = 250,
     start: Annotated[datetime | None, Query(description="Window start.")] = None,
     end: Annotated[datetime | None, Query(description="Window end.")] = None,

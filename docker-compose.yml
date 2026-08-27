@@ -61,6 +61,9 @@ services:
       - ./backend/alembic.ini:/app/alembic.ini
       - ./backend/tests:/app/tests
       - ./backend/pyproject.toml:/app/pyproject.toml
+      # Read-only, so tests/test_configuration.py can check that every setting
+      # is still documented. Not used to configure anything.
+      - ./backend/.env.example:/app/.env.example:ro
     depends_on:
       postgres:
         condition: service_healthy

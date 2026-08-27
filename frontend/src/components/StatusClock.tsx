@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react';
 
+// A feed older than STALE_AFTER_SECONDS is amber rather than green.
+import { CLOCK_STALE_AFTER_SECONDS as STALE_AFTER_SECONDS } from '@/config/realtime';
 import type { PriceTick } from '@/types/stream';
 import { formatClockDate, formatClockTime } from '@/utils/format';
-
-/** A feed older than this is amber rather than green. */
-const STALE_AFTER_SECONDS = 15;
 
 interface Props {
   /** Latest tick, used for the "updated" stamp. */

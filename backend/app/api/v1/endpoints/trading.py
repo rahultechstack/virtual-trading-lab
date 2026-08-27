@@ -10,6 +10,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query, status
 
 from app.api.deps import DbSession
+from app.core.config import settings
 from app.core.exceptions import InvalidOrderError
 from app.models.enums import OrderSide, OrderStatus
 from app.market_data.instruments import (
@@ -107,7 +108,9 @@ async def place_order(
 @router.get("/orders", response_model=list[OrderResponse], summary="Order history")
 async def list_orders(
     session: DbSession,
-    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    limit: Annotated[
+        int, Query(ge=1, le=settings.MAX_HISTORY_PAGE_SIZE)
+    ] = settings.DEFAULT_HISTORY_PAGE_SIZE,
     offset: Annotated[int, Query(ge=0)] = 0,
     order_status: Annotated[
         OrderStatus | None, Query(alias="status", description="Filter by status.")
@@ -123,7 +126,9 @@ async def list_orders(
 @router.get("/trades", response_model=list[TradeResponse], summary="Trade history")
 async def list_trades(
     session: DbSession,
-    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    limit: Annotated[
+        int, Query(ge=1, le=settings.MAX_HISTORY_PAGE_SIZE)
+    ] = settings.DEFAULT_HISTORY_PAGE_SIZE,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[TradeResponse]:
     """Newest first."""
@@ -236,7 +241,9 @@ async def get_portfolio(
 async def preview_execution_cost(
     session: DbSession,
     side: Annotated[OrderSide, Query(description="Side to price.")],
-    quantity: Annotated[Decimal, Query(gt=0, le=10_000_000)],
+    quantity: Annotated[
+        Decimal, Query(gt=0, le=settings.MAX_ORDER_QUANTITY)
+    ],
     reference_price: Annotated[Decimal, Query(gt=0, description="Mid price.")],
     symbol: Annotated[
         str | None,

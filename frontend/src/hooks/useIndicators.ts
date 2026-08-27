@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { fetchIndicators } from '@/api/indicators';
+import { INDICATOR_STORAGE_KEY as STORAGE_KEY } from '@/config/ui';
 import type { Interval } from '@/types/marketData';
 import { INDICATOR_PRESETS, type Indicator } from '@/types/indicators';
-
-const STORAGE_KEY = 'vtrader.indicators';
 
 function loadEnabled(): string[] {
   try {

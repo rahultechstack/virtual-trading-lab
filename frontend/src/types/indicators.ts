@@ -5,6 +5,8 @@
  * API. They are converted to `number` only where the chart needs them.
  */
 
+import { INDICATOR_COLORS } from '@/config/chart';
+
 import type { Interval } from './marketData';
 
 export type IndicatorType = 'sma' | 'ema' | 'rsi' | 'macd' | 'bbands' | 'vwap';
@@ -66,11 +68,11 @@ export interface IndicatorPreset {
  * indicator keeps its colour no matter which others are enabled.
  */
 export const INDICATOR_PRESETS: readonly IndicatorPreset[] = [
-  { id: 'sma20', spec: 'sma:20', label: 'SMA 20', pane: 'price', color: '#4c8dff' },
-  { id: 'sma50', spec: 'sma:50', label: 'SMA 50', pane: 'price', color: '#a855f7' },
-  { id: 'ema21', spec: 'ema:21', label: 'EMA 21', pane: 'price', color: '#f59e0b' },
-  { id: 'bbands', spec: 'bbands:20:2', label: 'Bollinger', pane: 'price', color: '#64748b' },
-  { id: 'vwap', spec: 'vwap:20', label: 'VWAP', pane: 'price', color: '#14b8a6' },
-  { id: 'rsi14', spec: 'rsi:14', label: 'RSI 14', pane: 'separate', color: '#4c8dff' },
-  { id: 'macd', spec: 'macd:12:26:9', label: 'MACD', pane: 'separate', color: '#4c8dff' },
+  { id: 'sma20', spec: 'sma:20', label: 'SMA 20', pane: 'price', color: INDICATOR_COLORS.primary },
+  { id: 'sma50', spec: 'sma:50', label: 'SMA 50', pane: 'price', color: INDICATOR_COLORS.violet },
+  { id: 'ema21', spec: 'ema:21', label: 'EMA 21', pane: 'price', color: INDICATOR_COLORS.amber },
+  { id: 'bbands', spec: 'bbands:20:2', label: 'Bollinger', pane: 'price', color: INDICATOR_COLORS.slate },
+  { id: 'vwap', spec: 'vwap:20', label: 'VWAP', pane: 'price', color: INDICATOR_COLORS.teal },
+  { id: 'rsi14', spec: 'rsi:14', label: 'RSI 14', pane: 'separate', color: INDICATOR_COLORS.primary },
+  { id: 'macd', spec: 'macd:12:26:9', label: 'MACD', pane: 'separate', color: INDICATOR_COLORS.primary },
 ];

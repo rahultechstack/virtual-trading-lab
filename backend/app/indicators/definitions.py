@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 
+from app.core.config import settings
 from app.core.exceptions import DomainError
 
 
@@ -130,7 +131,8 @@ CATALOGUE: dict[IndicatorType, IndicatorDef] = {
 }
 
 #: Cap on how many indicators one request may ask for.
-MAX_INDICATORS = 10
+#: Reads through to settings; kept as a module attribute for existing callers.
+MAX_INDICATORS = settings.MAX_INDICATORS_PER_REQUEST
 
 
 @dataclass(frozen=True)
@@ -258,8 +260,9 @@ def parse_specs(raw: str | None) -> list[IndicatorSpec]:
         seen.add(spec.key)
         specs.append(spec)
 
-    if len(specs) > MAX_INDICATORS:
+    if len(specs) > settings.MAX_INDICATORS_PER_REQUEST:
         raise InvalidIndicatorError(
-            f"At most {MAX_INDICATORS} indicators per request, got {len(specs)}."
+            f"At most {settings.MAX_INDICATORS_PER_REQUEST} indicators per "
+            f"request, got {len(specs)}."
         )
     return specs

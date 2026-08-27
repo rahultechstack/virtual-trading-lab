@@ -52,7 +52,9 @@ logger = get_logger(__name__)
 #: Re-read the ACTIVE set at least this often, even while the cache says there
 #: is nothing armed. Guards against a row inserted outside this process (psql, a
 #: second worker) never being noticed.
-REVALIDATE_EVERY_EVALUATIONS = 20
+#:
+#: Reads through to settings; kept as a module attribute for existing callers.
+REVALIDATE_EVERY_EVALUATIONS = settings.AUTOMATION_REVALIDATE_EVERY_EVALUATIONS
 
 
 class AutomaticOrderMonitor:
@@ -139,7 +141,8 @@ class AutomaticOrderMonitor:
         self._since_revalidate += 1
         stale = (
             self._active_symbols is None
-            or self._since_revalidate >= REVALIDATE_EVERY_EVALUATIONS
+            or self._since_revalidate
+            >= settings.AUTOMATION_REVALIDATE_EVERY_EVALUATIONS
         )
         if stale:
             await self.refresh_armed_symbols()

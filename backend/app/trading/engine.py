@@ -55,7 +55,7 @@ from app.market_data.instruments import (
 )
 from app.markets.registry import calendar_for
 from app.models.enums import OrderSide, OrderStatus, OrderType
-from app.models.trading import MAX_ORDER_QUANTITY, Order, Position, Trade
+from app.models.trading import Order, Position, Trade
 from app.repositories.wallet_repository import WalletRepository
 from app.trading.execution import ExecutionEngine
 from app.trading.order_manager import OrderManager
@@ -374,9 +374,10 @@ class TradingEngine:
         which knows the instrument; only the absolute bound and the price
         remain.
         """
-        if quantity > MAX_ORDER_QUANTITY:
+        if quantity > settings.MAX_ORDER_QUANTITY:
             raise InvalidOrderError(
-                f"Quantity {quantity} exceeds the maximum of {MAX_ORDER_QUANTITY}."
+                f"Quantity {quantity} exceeds the maximum of "
+                f"{settings.MAX_ORDER_QUANTITY}."
             )
         if reference_price <= 0:
             raise InvalidOrderError(

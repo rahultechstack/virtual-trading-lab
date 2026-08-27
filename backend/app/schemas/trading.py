@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.common import Quantity
 
+from app.core.config import settings
 from app.market_data.instruments import AssetClass
 from app.models.enums import OrderSide, OrderStatus, OrderType
 
@@ -39,7 +40,7 @@ class PlaceOrderRequest(BaseModel):
     side: OrderSide = Field(description="BUY, SELL, SHORT_SELL or BUY_TO_COVER.")
     quantity: Decimal = Field(
         gt=0,
-        le=10_000_000,
+        le=settings.MAX_ORDER_QUANTITY,
         description=(
             "Positive size. Whole units for a stock; fractional for crypto, "
             "down to the instrument's quantity_step. Send it as a string "

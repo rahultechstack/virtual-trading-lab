@@ -7,6 +7,8 @@
  * matters.
  */
 
+import { CHART_TIME_ZONE as EXCHANGE_TIME_ZONE } from '@/config/chart';
+
 const EM_DASH = '\u2014';
 
 export function toNumber(value: string | number | null | undefined): number | null {
@@ -120,7 +122,6 @@ export function formatDateTime(iso: string | null | undefined): string {
  * already anchors intraday VWAP to this same zone
  * (`app/indicators/library.py:SESSION_TIMEZONE`).
  */
-export const EXCHANGE_TIME_ZONE = 'Asia/Kolkata';
 
 /**
  * Chart axis label for an epoch-seconds timestamp, in exchange-local time.

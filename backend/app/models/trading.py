@@ -48,8 +48,17 @@ AVERAGE = Numeric(18, 4)
 #: Quantities. Fractional to eight places -- see the module docstring.
 QUANTITY = Numeric(28, 8)
 
-#: Sanity bound; a paper account has no business ordering more than this.
-MAX_ORDER_QUANTITY = 10_000_000
+#: The ceiling baked into the CHECK constraints below.
+#:
+#: STRUCTURAL, not configuration: it is part of the schema, so **raising it
+#: requires a migration**. The limit the application enforces on a request is
+#: ``settings.MAX_ORDER_QUANTITY``, which may be lowered freely and must never
+#: exceed this.
+DB_MAX_ORDER_QUANTITY = 10_000_000
+
+#: Back-compat alias. Callers that want the *enforced* limit should read
+#: ``settings.MAX_ORDER_QUANTITY``; this name now means the schema ceiling.
+MAX_ORDER_QUANTITY = DB_MAX_ORDER_QUANTITY
 
 
 def _side_enum(name: str) -> Enum:
@@ -77,7 +86,7 @@ class Order(TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("quantity > 0", name="quantity_positive"),
         CheckConstraint(
-            f"quantity <= {MAX_ORDER_QUANTITY}", name="quantity_within_bounds"
+            f"quantity <= {DB_MAX_ORDER_QUANTITY}", name="quantity_within_bounds"
         ),
         CheckConstraint(
             "requested_price IS NULL OR requested_price > 0",

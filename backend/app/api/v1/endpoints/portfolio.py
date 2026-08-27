@@ -9,6 +9,7 @@ from fastapi import APIRouter, Query, status
 from app.analytics.performance import PerformanceAnalyzer
 from app.analytics.snapshots import SnapshotService
 from app.api.deps import DbSession
+from app.core.config import settings
 from app.market_data.instruments import resolve_symbol
 from app.models.portfolio_snapshot import SnapshotSource
 from app.schemas.portfolio import (
@@ -31,7 +32,9 @@ async def list_snapshots(
         datetime | None, Query(description="Window start (ISO 8601).")
     ] = None,
     end: Annotated[datetime | None, Query(description="Window end (ISO 8601).")] = None,
-    limit: Annotated[int, Query(ge=1, le=5000)] = 500,
+    limit: Annotated[
+        int, Query(ge=1, le=settings.MAX_SNAPSHOT_PAGE_SIZE)
+    ] = 500,
     source: Annotated[
         SnapshotSource | None, Query(description="Filter by how it was captured.")
     ] = None,

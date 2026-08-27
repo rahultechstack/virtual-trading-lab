@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { PageShell } from './PageShell';
 import { fetchTrades } from '@/api/trading';
+import { HISTORY_PAGE_LIMIT as LIMIT } from '@/config/ui';
 import { SIDE_LABELS, isBullishSide, type Trade } from '@/types/trading';
 import {
   formatDateTime,
@@ -9,8 +10,6 @@ import {
   formatRupees,
   signClass,
 } from '@/utils/format';
-
-const LIMIT = 200;
 
 /**
  * Every executed fill, newest first.

@@ -35,7 +35,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base, TimestampMixin
 from app.market_data.instruments import AssetClass
 from app.models.enums import OrderSide
-from app.models.trading import MAX_ORDER_QUANTITY, QUANTITY
+from app.models.trading import DB_MAX_ORDER_QUANTITY, QUANTITY
 
 #: Prices and cash amounts, as everywhere else in the schema.
 MONEY = Numeric(18, 2)
@@ -87,7 +87,7 @@ class AutomaticOrder(TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("quantity > 0", name="quantity_positive"),
         CheckConstraint(
-            f"quantity <= {MAX_ORDER_QUANTITY}", name="quantity_within_bounds"
+            f"quantity <= {DB_MAX_ORDER_QUANTITY}", name="quantity_within_bounds"
         ),
         CheckConstraint("trigger_price > 0", name="trigger_price_positive"),
         # A fired order must record when it fired.

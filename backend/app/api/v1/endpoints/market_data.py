@@ -9,6 +9,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
+from app.core.config import settings
 from app.market_data.base import MarketDataProvider
 from app.market_data.registry import get_provider
 from app.schemas.market_data import (
@@ -118,7 +119,11 @@ async def get_candles(
     ] = None,
     limit: Annotated[
         int | None,
-        Query(ge=1, le=5000, description="Keep only the most recent N candles."),
+        Query(
+            ge=1,
+            le=settings.MAX_CANDLES_PER_REQUEST,
+            description="Keep only the most recent N candles.",
+        ),
     ] = None,
     symbol: Annotated[
         str | None, Query(description="Optional. Must be the configured symbol if supplied.")

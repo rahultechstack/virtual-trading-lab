@@ -23,7 +23,8 @@ logger = get_logger(__name__)
 
 
 def _build_yahoo() -> MarketDataProvider:
-    return YahooFinanceProvider(timeout_seconds=settings.MARKET_DATA_TIMEOUT_SECONDS)
+    # Endpoint, user agent and timeout all come from settings.
+    return YahooFinanceProvider()
 
 
 def _build_yahoo_crypto() -> MarketDataProvider:

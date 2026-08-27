@@ -7,20 +7,21 @@ import {
 } from 'lightweight-charts';
 import { useEffect, useRef } from 'react';
 
+import {
+  DEFAULT_SERIES_COLOR as DEFAULT_COLOR,
+  GRID_COLOR as GRID,
+  INDICATOR_COLORS,
+  TEXT_COLOR as TEXT,
+} from '@/config/chart';
 import type { Indicator, IndicatorSeries } from '@/types/indicators';
 import { formatChartTick, formatChartTime } from '@/utils/format';
 
-const GRID = '#232833';
-const TEXT = '#949aa6';
-
 /** Distinct colours for the sub-series of a multi-line oscillator. */
 const SERIES_COLORS: Record<string, string> = {
-  MACD: '#4c8dff',
-  Signal: '#f59e0b',
-  Histogram: '#64748b',
+  MACD: INDICATOR_COLORS.primary,
+  Signal: INDICATOR_COLORS.amber,
+  Histogram: INDICATOR_COLORS.slate,
 };
-
-const DEFAULT_COLOR = '#4c8dff';
 
 interface Props {
   indicator: Indicator;

@@ -2,6 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { fetchInstruments } from '@/api/instruments';
 import {
+  INSTRUMENT_SEARCH_DEBOUNCE_MS,
+  INSTRUMENT_SEARCH_LIMIT,
+} from '@/config/ui';
+import {
   ASSET_CLASS_LABELS,
   type AssetClass,
   type AssetFilter,
@@ -55,7 +59,7 @@ export function StockSelector({ selected, onSelect }: Props) {
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       setLoading(true);
-      fetchInstruments(query, filter, 100, controller.signal)
+      fetchInstruments(query, filter, INSTRUMENT_SEARCH_LIMIT, controller.signal)
         .then((rows) => {
           setResults(rows);
           setHighlight(0);
@@ -68,7 +72,7 @@ export function StockSelector({ selected, onSelect }: Props) {
           );
         })
         .finally(() => setLoading(false));
-    }, 180);
+    }, INSTRUMENT_SEARCH_DEBOUNCE_MS);
 
     return () => {
       window.clearTimeout(timer);

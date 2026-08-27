@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { EquityCurve } from './EquityCurve';
 import { PageShell } from './PageShell';
 import { captureSnapshot, fetchSnapshots } from '@/api/portfolio';
+import { SNAPSHOT_PAGE_LIMIT as LIMIT } from '@/config/ui';
 import { useLivePrice } from '@/hooks/useLivePrice';
 import type { PortfolioSnapshot } from '@/types/portfolio';
 import {
@@ -11,8 +12,6 @@ import {
   formatRupees,
   signClass,
 } from '@/utils/format';
-
-const LIMIT = 1000;
 
 type Metric = 'total_value' | 'net_pnl';
 

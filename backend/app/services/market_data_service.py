@@ -33,7 +33,10 @@ from app.schemas.market_data import (
 logger = get_logger(__name__)
 
 #: Upper bound on candles returned in one response.
-MAX_CANDLES = 5000
+#:
+#: Reads through to settings so there is one place to change it. Kept as a
+#: module attribute because callers and tests already import this name.
+MAX_CANDLES = settings.MAX_CANDLES_PER_REQUEST
 
 
 class MarketDataService:
@@ -126,7 +129,8 @@ class MarketDataService:
         provider = self.provider_for(instrument)
         self._require_supported_interval(interval, provider)
 
-        effective_limit = min(limit or MAX_CANDLES, MAX_CANDLES)
+        cap = settings.MAX_CANDLES_PER_REQUEST
+        effective_limit = min(limit or cap, cap)
 
         candles = await provider.get_historical_candles(
             symbol=instrument.symbol,

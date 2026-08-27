@@ -10,10 +10,12 @@ import { useEffect, useMemo, useRef } from 'react';
 import type { PortfolioSnapshot } from '@/types/portfolio';
 import { formatChartTick, formatChartTime } from '@/utils/format';
 
-const GRID = '#232833';
-const TEXT = '#949aa6';
-const UP = '#2ea86a';
-const DOWN = '#d9534f';
+import {
+  DOWN_COLOR as DOWN,
+  GRID_COLOR as GRID,
+  TEXT_COLOR as TEXT,
+  UP_COLOR as UP,
+} from '@/config/chart';
 
 interface Props {
   snapshots: PortfolioSnapshot[];

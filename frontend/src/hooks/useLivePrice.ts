@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { wsUrl } from '@/api/client';
+import {
+  INITIAL_BACKOFF_MS,
+  MAX_BACKOFF_MS,
+  PING_INTERVAL_MS,
+  STALE_AFTER_MS,
+} from '@/config/realtime';
 import type {
   AutomaticOrderEvent,
   ConnectionState,
@@ -12,14 +18,11 @@ import type {
 } from '@/types/stream';
 
 /** Reconnect backoff: doubles from 1s, capped, with jitter. */
-const INITIAL_BACKOFF_MS = 1_000;
-const MAX_BACKOFF_MS = 15_000;
+// Timings live in @/config/realtime -- one place to tune reconnection.
 
 /** Client heartbeat, so idle proxies do not silently drop the socket. */
-const PING_INTERVAL_MS = 25_000;
 
 /** A tick older than this is shown as stale rather than as current. */
-const STALE_AFTER_MS = 30_000;
 
 interface UseLivePriceResult {
   tick: PriceTick | null;

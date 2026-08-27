@@ -30,13 +30,14 @@ from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
 from zoneinfo import ZoneInfo
 
+from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
 #: How far ahead ``next_open``/``next_close`` will search before giving up.
 #: Comfortably longer than any realistic exchange closure.
-_SEARCH_HORIZON_DAYS = 30
+_SEARCH_HORIZON_DAYS = settings.CALENDAR_SEARCH_HORIZON_DAYS
 
 
 class TradingStatus(StrEnum):

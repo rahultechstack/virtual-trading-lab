@@ -18,10 +18,13 @@ import { TIMEFRAMES, type Candle, type Interval } from '@/types/marketData';
 import { INDICATOR_PRESETS, type Indicator } from '@/types/indicators';
 import type { PriceTick } from '@/types/stream';
 
-const UP = '#2ea86a';
-const DOWN = '#d9534f';
-const GRID = '#232833';
-const TEXT = '#949aa6';
+import {
+  DEFAULT_SERIES_COLOR,
+  DOWN_COLOR as DOWN,
+  GRID_COLOR as GRID,
+  TEXT_COLOR as TEXT,
+  UP_COLOR as UP,
+} from '@/config/chart';
 
 /** Bollinger sub-series are drawn thinner than a standalone moving average. */
 const BAND_LABELS = new Set(['Upper', 'Lower']);
@@ -58,7 +61,7 @@ function toVolume(candle: Candle): HistogramData {
 function colorFor(indicator: Indicator): string {
   return (
     INDICATOR_PRESETS.find((preset) => preset.spec.startsWith(indicator.type))
-      ?.color ?? '#4c8dff'
+      ?.color ?? DEFAULT_SERIES_COLOR
   );
 }
 

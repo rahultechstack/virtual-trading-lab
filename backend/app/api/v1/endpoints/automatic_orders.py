@@ -11,6 +11,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query, status
 
 from app.api.deps import DbSession
+from app.core.config import settings
 from app.automation.service import AutomaticOrderService
 from app.models.automatic_order import AutomaticOrderStatus
 from app.schemas.automatic_order import (
@@ -81,7 +82,9 @@ async def create_automatic_order(
 )
 async def list_active_automatic_orders(
     session: DbSession,
-    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    limit: Annotated[
+        int, Query(ge=1, le=settings.MAX_HISTORY_PAGE_SIZE)
+    ] = settings.DEFAULT_HISTORY_PAGE_SIZE,
 ) -> list[AutomaticOrderResponse]:
     """Oldest first -- the order the monitor evaluates them in."""
     orders = await AutomaticOrderService(session).list_active(limit=limit)
@@ -95,7 +98,9 @@ async def list_active_automatic_orders(
 )
 async def list_automatic_orders(
     session: DbSession,
-    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    limit: Annotated[
+        int, Query(ge=1, le=settings.MAX_HISTORY_PAGE_SIZE)
+    ] = settings.DEFAULT_HISTORY_PAGE_SIZE,
     offset: Annotated[int, Query(ge=0)] = 0,
     order_status: Annotated[
         AutomaticOrderStatus | None, Query(alias="status", description="Filter by status.")

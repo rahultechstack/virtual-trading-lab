@@ -46,9 +46,10 @@ class YahooCryptoProvider(YahooChartProvider):
 
     def __init__(
         self,
-        timeout_seconds: float = 15.0,
+        timeout_seconds: float | None = None,
         quote_currency: str | None = None,
     ) -> None:
+        # The endpoint and user agent come from settings via the base class.
         super().__init__(timeout_seconds=timeout_seconds)
         self._quote_currency = (
             quote_currency or settings.CRYPTO_QUOTE_CURRENCY

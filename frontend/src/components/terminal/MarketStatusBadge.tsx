@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { fetchMarketStatus } from '@/api/markets';
+import { MARKET_STATUS_REFRESH_MS as REFRESH_MS } from '@/config/ui';
 import {
   STATUS_LABELS,
   STATUS_TONE,
@@ -8,14 +9,6 @@ import {
 } from '@/types/markets';
 import type { StreamSubscription } from '@/types/stream';
 import { formatTime } from '@/utils/format';
-
-/**
- * How often to re-ask the backend whether the market is open.
- *
- * A session boundary is a minute-scale event, so a minute is ample. The
- * WebSocket subscription frame already refreshes this instantly on a switch.
- */
-const REFRESH_MS = 60_000;
 
 interface Props {
   symbol: string;

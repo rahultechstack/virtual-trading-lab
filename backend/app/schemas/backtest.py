@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.schemas.common import Quantity
 
 from app.backtest.engine import FillTiming, SizingMode
+from app.core.config import settings
 from app.models.enums import OrderSide
 from app.schemas.market_data import Interval
 
@@ -41,7 +42,12 @@ class BacktestRequest(BaseModel):
         description="Instrument to backtest. Defaults to the configured default.",
     )
     interval: Interval = Interval.ONE_DAY
-    limit: int = Field(default=500, ge=10, le=5000, description="Candles to run over.")
+    limit: int = Field(
+        default=500,
+        ge=10,
+        le=settings.MAX_CANDLES_PER_REQUEST,
+        description="Candles to run over.",
+    )
     start: datetime | None = None
     end: datetime | None = None
 
@@ -61,7 +67,7 @@ class BacktestRequest(BaseModel):
     fixed_quantity: Decimal = Field(
         default=Decimal("100"),
         gt=0,
-        le=10_000_000,
+        le=settings.MAX_ORDER_QUANTITY,
         max_digits=28,
         decimal_places=8,
         description=(

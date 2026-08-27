@@ -16,13 +16,15 @@ import numpy as np
 import pandas as pd
 import talib
 
+from app.core.config import settings
 from app.indicators.definitions import IndicatorSpec, IndicatorType
 
 #: Intervals where VWAP anchors to the trading session.
 INTRADAY_INTERVALS = frozenset({"1m", "5m", "15m", "30m", "1h"})
 
 #: Exchange timezone, which is what defines a session boundary.
-SESSION_TIMEZONE = "Asia/Kolkata"
+#: Reads through to settings; kept as a module attribute for existing callers.
+SESSION_TIMEZONE = settings.VWAP_SESSION_TIMEZONE
 
 
 def _close(frame: pd.DataFrame) -> np.ndarray:
@@ -103,7 +105,9 @@ def vwap(frame: pd.DataFrame, spec: IndicatorSpec) -> dict[str, np.ndarray]:
     if interval in INTRADAY_INTERVALS:
         # Group by exchange-local calendar day so the anchor matches the
         # session, not UTC midnight.
-        sessions = frame.index.tz_convert(SESSION_TIMEZONE).normalize()
+        sessions = frame.index.tz_convert(
+            settings.VWAP_SESSION_TIMEZONE
+        ).normalize()
         cumulative_weighted = weighted.groupby(sessions).cumsum()
         cumulative_volume = volume.groupby(sessions).cumsum()
     else:

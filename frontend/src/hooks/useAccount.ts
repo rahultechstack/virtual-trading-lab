@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiError } from '@/api/client';
+import { REVALUE_THROTTLE_MS, TERMINAL_HISTORY_LIMIT } from '@/config/ui';
 import {
   fetchOrders,
   fetchPortfolio,
@@ -18,9 +19,8 @@ import type { Order, Portfolio, Position, Trade, Wallet } from '@/types/trading'
  * would reintroduce exactly the imprecision the backend schema exists to
  * avoid, so the trade is a small delay instead.
  */
-const REVALUE_THROTTLE_MS = 3_000;
+// Cadence and page size live in @/config/ui.
 
-const HISTORY_LIMIT = 25;
 
 interface AccountState {
   wallet: Wallet | null;
@@ -82,8 +82,8 @@ export function useAccount(
             if (err instanceof ApiError && err.isNotFound) return null;
             throw err;
           }),
-          fetchOrders(HISTORY_LIMIT),
-          fetchTrades(HISTORY_LIMIT),
+          fetchOrders(TERMINAL_HISTORY_LIMIT),
+          fetchTrades(TERMINAL_HISTORY_LIMIT),
         ]);
 
       if (!activeRef.current) return;
