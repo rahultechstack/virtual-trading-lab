@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from app.core.exceptions import InsufficientFundsError
+from app.market_data.instruments import AssetClass
 from app.models.wallet import Wallet
 from app.repositories.wallet_repository import WalletRepository
 from app.trading.execution import Fill
@@ -47,7 +48,7 @@ class PortfolioSnapshot:
 
     cash_balance: Decimal
     initial_balance: Decimal
-    quantity: int
+    quantity: Decimal
     average_price: Decimal
     #: Realized P&L from price movement, before charges.
     realized_pnl: Decimal
@@ -119,7 +120,7 @@ class PortfolioManager:
     def snapshot(
         *,
         wallet: Wallet,
-        quantity: int,
+        quantity: Decimal,
         average_price: Decimal,
         realized_pnl: Decimal,
         total_charges: Decimal = Decimal("0.00"),
@@ -175,7 +176,8 @@ class PositionValuation:
 
     symbol: str
     exchange: str
-    quantity: int
+    asset_class: AssetClass
+    quantity: Decimal
     average_price: Decimal
     mark_price: Decimal | None
     position_value: Decimal
@@ -210,6 +212,20 @@ class PortfolioValuation:
     positions: list[PositionValuation]
     #: Instruments the caller supplied no mark price for, so they are unvalued.
     unpriced_symbols: list[str]
+
+    def value_by_asset_class(self) -> dict[AssetClass, Decimal]:
+        """Position value split by asset class.
+
+        One wallet funds every class, so this is a *breakdown* of a single
+        pool, not a set of separate balances.
+        """
+        totals: dict[AssetClass, Decimal] = {}
+        for position in self.positions:
+            totals[position.asset_class] = to_money(
+                totals.get(position.asset_class, Decimal("0.00"))
+                + position.position_value
+            )
+        return totals
 
 
 def value_portfolio(
@@ -263,6 +279,7 @@ def value_portfolio(
             PositionValuation(
                 symbol=position.symbol,
                 exchange=position.exchange,
+                asset_class=position.asset_class,
                 quantity=position.quantity,
                 average_price=position.average_price,
                 mark_price=mark if position.quantity != 0 else None,

@@ -16,6 +16,7 @@ from sqlalchemy import BigInteger, CheckConstraint, DateTime, Enum, Index, Integ
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.models.trading import QUANTITY
 
 MONEY = Numeric(18, 2)
 AVERAGE = Numeric(18, 4)
@@ -64,7 +65,9 @@ class PortfolioSnapshot(Base):
     symbol: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     #: Signed position at the time: > 0 long, 0 flat, < 0 short.
-    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    quantity: Mapped[Decimal] = mapped_column(
+        QUANTITY, nullable=False, default=Decimal("0")
+    )
     average_price: Mapped[Decimal] = mapped_column(
         AVERAGE, nullable=False, default=Decimal("0.0000")
     )

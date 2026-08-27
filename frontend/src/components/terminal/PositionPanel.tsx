@@ -1,6 +1,11 @@
 import { DEFAULT_EXCHANGE, DEFAULT_SYMBOL } from '@/config/instrument';
 import type { Portfolio, Position } from '@/types/trading';
-import { formatQuantity, formatRupees, signClass } from '@/utils/format';
+import {
+  formatQuantity,
+  formatRupees,
+  signClass,
+  toQuantity,
+} from '@/utils/format';
 
 interface Props {
   position: Position | null;
@@ -18,7 +23,9 @@ function directionOf(quantity: number): Direction {
 
 /** The open position, valued at the live price. */
 export function PositionPanel({ position, portfolio, currentPrice }: Props) {
-  const quantity = position?.quantity ?? 0;
+  // A Decimal string on the wire; read as a number only for the sign test and
+  // the display, never for arithmetic that is sent back.
+  const quantity = toQuantity(position?.quantity);
   const direction = directionOf(quantity);
   const isFlat = direction === 'FLAT';
 
@@ -55,7 +62,7 @@ export function PositionPanel({ position, portfolio, currentPrice }: Props) {
                 <span className="muted"> {position?.exchange ?? DEFAULT_EXCHANGE}</span>
               </td>
               <td className={`numeric ${quantity > 0 ? 'positive' : 'negative'}`}>
-                {formatQuantity(quantity)}
+                {formatQuantity(position?.quantity)}
               </td>
               <td className="numeric">{formatRupees(position?.average_price)}</td>
               <td className="numeric">{formatRupees(currentPrice)}</td>

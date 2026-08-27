@@ -10,6 +10,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.market_data.instruments import AssetClass
 from app.models.enums import OrderSide, OrderStatus, OrderType
 from app.models.trading import Order
 
@@ -26,14 +27,16 @@ class OrderManager:
         symbol: str,
         exchange: str,
         side: OrderSide,
-        quantity: int,
+        quantity: Decimal,
         requested_price: Decimal | None,
         order_type: OrderType = OrderType.MARKET,
+        asset_class: AssetClass = AssetClass.STOCK,
     ) -> Order:
         """Record a new order in ``PENDING``."""
         order = Order(
             symbol=symbol,
             exchange=exchange,
+            asset_class=asset_class,
             side=side,
             order_type=order_type,
             quantity=quantity,

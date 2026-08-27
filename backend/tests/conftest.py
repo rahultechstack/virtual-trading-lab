@@ -94,6 +94,26 @@ async def clean_tables() -> None:
     yield
 
 
+@pytest.fixture(autouse=True)
+def isolated_market_data_providers() -> None:
+    """Give every test a fresh per-asset-class provider cache.
+
+    Providers hold an ``httpx.AsyncClient``, which is bound to the event loop
+    that created it. Each test may run in its own loop, so a cached instance
+    from an earlier test cannot be reused -- the same reason the database uses
+    NullPool here. Availability probes are cleared too, so one test's cached
+    "BTC is unavailable" cannot leak into the next.
+    """
+    from app.market_data.instruments import instrument_registry
+    from app.market_data.router import reset_providers
+
+    reset_providers()
+    instrument_registry.reset_availability()
+    yield
+    reset_providers()
+    instrument_registry.reset_availability()
+
+
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
     """A session for tests that exercise the service layer directly."""

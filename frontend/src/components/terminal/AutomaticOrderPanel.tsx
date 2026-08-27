@@ -13,16 +13,22 @@ import {
   type AutomaticOrderType,
   type TriggerCondition,
 } from '@/types/automaticOrders';
+import type { Instrument } from '@/types/instruments';
 import { SIDE_LABELS, type OrderSide, type Position } from '@/types/trading';
-import { formatQuantity, formatRupees, formatTime } from '@/utils/format';
+import {
+  formatQuantity,
+  formatRupees,
+  formatTime,
+  toQuantity,
+} from '@/utils/format';
 
 const TYPES: AutomaticOrderType[] = ['STOP_LOSS', 'PRICE_TRIGGER'];
 const CONDITIONS: TriggerCondition[] = ['LTE', 'GTE'];
 const ACTIONS: OrderSide[] = ['BUY', 'SELL', 'SHORT_SELL', 'BUY_TO_COVER'];
 
 interface Props {
-  /** Instrument the trigger is created against. */
-  symbol: string | null;
+  /** Instrument the trigger is created against. Decides the legal step size. */
+  instrument: Instrument | null;
   position: Position | null;
   /** Live price, sent so the backend can reject a stop that fires instantly. */
   referencePrice: string | null;
@@ -43,9 +49,14 @@ interface Props {
  * This is a convenience, not a rule. The backend re-derives and re-validates
  * the same thing, and it alone decides whether a trigger fires -- the frontend
  * never evaluates a price against a trigger.
+ *
+ * A crypto trigger works identically, with a fractional quantity. It also
+ * stays armed around the clock: the backend keeps polling an instrument that
+ * has an active trigger even with no browser open, so a stop set on Friday can
+ * fire over the weekend.
  */
 export function AutomaticOrderPanel({
-  symbol,
+  instrument,
   position,
   referencePrice,
   disabled = false,
@@ -56,7 +67,8 @@ export function AutomaticOrderPanel({
   const [condition, setCondition] = useState<TriggerCondition>('LTE');
   const [action, setAction] = useState<OrderSide>('SELL');
   const [triggerPrice, setTriggerPrice] = useState('');
-  const [quantity, setQuantity] = useState(100);
+  // A Decimal string, like every quantity crossing the API.
+  const [quantity, setQuantity] = useState('100');
 
   const [orders, setOrders] = useState<AutomaticOrder[]>([]);
   const [loading, setLoading] = useState(true);
@@ -64,7 +76,9 @@ export function AutomaticOrderPanel({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const quantityHeld = position?.quantity ?? 0;
+  const symbol = instrument?.symbol ?? null;
+  const isFractional = instrument?.is_fractional ?? false;
+  const quantityHeld = toQuantity(position?.quantity);
   const isStopLoss = orderType === 'STOP_LOSS';
   const isFlat = quantityHeld === 0;
 
@@ -80,8 +94,10 @@ export function AutomaticOrderPanel({
     if (!isStopLoss || derived === null) return;
     setCondition(derived.condition);
     setAction(derived.action);
-    setQuantity(Math.abs(quantityHeld));
-  }, [isStopLoss, derived, quantityHeld]);
+    // Protect the whole position by default. Taken from the position string so
+    // a fractional crypto size survives exactly.
+    setQuantity(String(position?.quantity ?? 0).replace('-', ''));
+  }, [isStopLoss, derived, quantityHeld, position]);
 
   const load = useCallback(() => {
     const controller = new AbortController();
@@ -103,7 +119,12 @@ export function AutomaticOrderPanel({
 
   const trigger = Number(triggerPrice);
   const invalidTrigger = !Number.isFinite(trigger) || trigger <= 0;
-  const invalidQuantity = !Number.isInteger(quantity) || quantity <= 0;
+  const size = Number(quantity);
+  const invalidQuantity =
+    !Number.isFinite(size) ||
+    size <= 0 ||
+    // Whole units only, unless the instrument says otherwise.
+    (!isFractional && !Number.isInteger(size));
   const stopWithoutPosition = isStopLoss && isFlat;
   const blocked =
     disabled || pending || invalidTrigger || invalidQuantity || stopWithoutPosition;
@@ -124,8 +145,9 @@ export function AutomaticOrderPanel({
         ...(symbol ? { symbol } : {}),
       });
       setNotice(
-        `${TYPE_LABELS[created.order_type]} armed: ${SIDE_LABELS[created.action]} ` +
-          `${created.quantity} at ${CONDITION_LABELS[created.trigger_condition]} ` +
+        `${TYPE_LABELS[created.order_type]} armed on ${created.symbol}: ` +
+          `${SIDE_LABELS[created.action]} ${formatQuantity(created.quantity)} at ` +
+          `${CONDITION_LABELS[created.trigger_condition]} ` +
           `${formatRupees(created.trigger_price)}`,
       );
       setTriggerPrice('');
@@ -228,10 +250,11 @@ export function AutomaticOrderPanel({
           <input
             className="field__input"
             type="number"
-            min={1}
-            step={1}
+            min={0}
+            step={instrument?.quantity_step ?? 1}
+            inputMode="decimal"
             value={quantity}
-            onChange={(event) => setQuantity(Number(event.target.value))}
+            onChange={(event) => setQuantity(event.target.value)}
             disabled={disabled}
           />
         </label>
@@ -261,6 +284,12 @@ export function AutomaticOrderPanel({
       )}
       {invalidTrigger && triggerPrice !== '' && (
         <p className="form-note negative">Trigger price must be a positive number.</p>
+      )}
+      {invalidQuantity && !isFractional && (
+        <p className="form-note negative">
+          {symbol ?? 'This instrument'} trades in whole units, so the quantity
+          must be a positive whole number.
+        </p>
       )}
 
       {error && (

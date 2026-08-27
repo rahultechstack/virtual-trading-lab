@@ -4,8 +4,14 @@ Sits between the API and whatever provider is configured. It owns the rules
 that are true of *this platform* rather than of any feed:
 
 * only instruments in the supported universe may be requested;
-* the interval requested must be one the configured provider actually serves;
+* the interval requested must be one the serving provider actually supports;
 * results are wrapped in the platform's own response models.
+
+**Providers are per asset class.** The service resolves the instrument, then
+asks ``app.market_data.router`` which feed serves it -- so a crypto symbol is
+never priced off the equity feed, and neither this class nor the API knows
+which feed that is. A provider passed to the constructor overrides the routing
+for every asset class, which is what tests do.
 
 It depends only on ``MarketDataProvider``, never on a concrete vendor.
 """
@@ -33,8 +39,19 @@ MAX_CANDLES = 5000
 class MarketDataService:
     """Market data for any instrument in the supported universe."""
 
-    def __init__(self, provider: MarketDataProvider) -> None:
+    def __init__(self, provider: MarketDataProvider | None = None) -> None:
+        #: An explicitly injected provider serves EVERY asset class. Left None,
+        #: each instrument is served by the feed routed for its class.
         self._provider = provider
+
+    def provider_for(self, instrument) -> MarketDataProvider:
+        """The feed serving one instrument."""
+        if self._provider is not None:
+            return self._provider
+
+        from app.market_data.router import provider_for
+
+        return provider_for(instrument)
 
     @property
     def symbol(self) -> str:
@@ -48,8 +65,16 @@ class MarketDataService:
 
     @property
     def capabilities(self) -> ProviderCapabilities:
-        """What the configured feed can actually do."""
-        return self._provider.capabilities
+        """What the feed serving the DEFAULT instrument can do.
+
+        Capabilities differ per asset class, so prefer
+        ``capabilities_for(symbol)`` when the instrument is known.
+        """
+        return self.provider_for(resolve_instrument(None)).capabilities
+
+    def capabilities_for(self, symbol: str | None = None) -> ProviderCapabilities:
+        """What the feed serving ``symbol`` can actually do."""
+        return self.provider_for(resolve_instrument(symbol)).capabilities
 
     # -- validation ------------------------------------------------------
 
@@ -62,11 +87,14 @@ class MarketDataService:
         """
         return resolve_instrument(symbol)
 
-    def _require_supported_interval(self, interval: Interval) -> Interval:
-        supported = self._provider.capabilities.supported_intervals
+    def _require_supported_interval(
+        self, interval: Interval, provider: MarketDataProvider
+    ) -> Interval:
+        """Check the interval against the feed that will actually serve it."""
+        supported = provider.capabilities.supported_intervals
         if interval not in supported:
             raise UnsupportedIntervalError(
-                f"Provider '{self._provider.capabilities.name}' does not serve "
+                f"Provider '{provider.capabilities.name}' does not serve "
                 f"the '{interval.value}' interval. "
                 f"Supported: {', '.join(i.value for i in supported)}."
             )
@@ -81,7 +109,7 @@ class MarketDataService:
         depth. Check ``capabilities.supports_bid_ask`` before relying on them.
         """
         instrument = self._require_supported_symbol(symbol)
-        return await self._provider.get_current_quote(
+        return await self.provider_for(instrument).get_current_quote(
             instrument.symbol, instrument.exchange
         )
 
@@ -95,11 +123,12 @@ class MarketDataService:
     ) -> CandleSeries:
         """OHLCV history for the configured instrument, oldest candle first."""
         instrument = self._require_supported_symbol(symbol)
-        self._require_supported_interval(interval)
+        provider = self.provider_for(instrument)
+        self._require_supported_interval(interval, provider)
 
         effective_limit = min(limit or MAX_CANDLES, MAX_CANDLES)
 
-        candles = await self._provider.get_historical_candles(
+        candles = await provider.get_historical_candles(
             symbol=instrument.symbol,
             exchange=instrument.exchange,
             interval=interval,
@@ -112,7 +141,7 @@ class MarketDataService:
             symbol=instrument.symbol,
             exchange=instrument.exchange,
             interval=interval,
-            provider=self._provider.capabilities.name,
+            provider=provider.capabilities.name,
             count=len(candles),
             candles=candles,
         )
@@ -125,7 +154,7 @@ class MarketDataService:
         later stage; the method exists now so the abstraction is complete.
         """
         instrument = self._require_supported_symbol(symbol)
-        return self._provider.subscribe_live_data(
+        return self.provider_for(instrument).subscribe_live_data(
             instrument.symbol, instrument.exchange
         )
 

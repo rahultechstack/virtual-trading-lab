@@ -2630,3 +2630,222 @@ change — all already carry `symbol`, and `positions` is keyed by it.
 
 The stock list is **never** hard-coded in React — it comes from
 `GET /instruments`.
+
+---
+
+## 15. Multi-Asset API (Stocks and Crypto)
+
+The platform trades NSE equities and cryptocurrencies against one wallet.
+**Auth: none required**, as everywhere else. Architecture in `ARCHITECTURE.md`
+§20.
+
+### 15.1 New and changed endpoints
+
+| # | Method | Path | Purpose |
+|---|--------|------|---------|
+| 35 | GET | `/api/v1/markets/status` | Is this instrument's market open? |
+| 36 | GET | `/api/v1/markets/statuses` | One row per asset class |
+| 37 | GET | `/api/v1/markets/clock` | Server time + exchange-local time |
+
+Changed:
+
+| Endpoint | Change |
+|---|---|
+| `GET /instruments` | **new** `asset_class` filter; rows gain `asset_class`, `market`, `trading_hours`, `quantity_step`, `is_fractional`, `quantity_precision` |
+| `GET /instruments/{symbol}` | probes the feed routed for the instrument's asset class |
+| `GET /market-data/quote` `\|` `/candles` | served by the routed feed, not always the equity one |
+| `GET /market-data/provider` | **new** `symbol` param — capabilities differ per asset class |
+| `GET /trading/execution-cost` | **new** `symbol` param; response gains `asset_class`; charges follow the asset class |
+| `GET /trading/portfolio/summary` | response gains `value_by_asset_class` |
+| `POST /trading/orders` | `quantity` is a **Decimal string**, may be fractional |
+| `POST /automatic-orders` | same |
+| every order/trade/position/trigger response | gains `asset_class`; `quantity` is a Decimal string |
+| `TradeResponse` / `ChargesResponse` | gain `tds` |
+
+### 15.2 Quantities are Decimal strings
+
+**Breaking change to the wire format.** `quantity`, `closed_quantity` and
+`position_after` were JSON numbers; they are now **strings**, like money.
+
+```json
+{"quantity": "0.00100000", "closed_quantity": "0.00000000"}
+```
+
+Crypto sizes carry eight decimal places, which a JSON double does not represent
+exactly. Always serialised in plain notation — never `1E-8`.
+
+**Send** sizes as strings too (`"0.001"`), so a float's binary expansion never
+reaches the ledger.
+
+What counts as a legal size comes from the instrument, not the schema:
+
+| Request | Result |
+|---|---|
+| `RELIANCE`, `"100"` | accepted |
+| `RELIANCE`, `"0.5"` | `400 invalid_quantity` — trades in whole units |
+| `BTC`, `"0.001"` | accepted |
+| `BTC`, `"0.000000001"` | `400 invalid_quantity` — finer than one satoshi |
+
+### 15.3 `GET /api/v1/instruments`
+
+| Query | Type | Default | Validation |
+|---|---|---|---|
+| `search` | `str \| None` | `None` | symbol or company/asset name |
+| `asset_class` | `STOCK \| CRYPTO \| None` | `None` | omit for everything |
+| `limit` | `int` | `50` | `ge=1, le=500` |
+
+```bash
+curl "http://localhost:8000/api/v1/instruments?search=bitcoin"
+```
+```json
+[{"symbol":"BTC","company_name":"Bitcoin","asset_class":"CRYPTO",
+  "exchange":"CRYPTO","market":"Global Crypto Spot","trading_hours":"24/7",
+  "instrument_type":"CRYPTOCURRENCY","quantity_step":"0.00000001",
+  "data_available":null,"is_fractional":true,"quantity_precision":8}]
+```
+
+A stock returns `"quantity_step":"1"`, `"is_fractional":false`,
+`"trading_hours":"09:15-15:30 IST, Mon-Fri"`.
+
+### 15.4 `GET /api/v1/markets/status`
+
+| Query | Type | Validation |
+|---|---|---|
+| `symbol` | `str \| None` | supported universe; defaults to the default instrument |
+
+`200`; `400 unsupported_symbol`.
+
+```bash
+curl "http://localhost:8000/api/v1/markets/status?symbol=BTC"
+```
+```json
+{"symbol":"BTC","asset_class":"CRYPTO","market":"Global Crypto Spot",
+ "calendar":"crypto","status":"OPEN","is_open":true,"is_24x7":true,
+ "timezone":"UTC","server_time":"2026-08-28T07:42:11.418Z",
+ "next_open":null,"next_close":null,
+ "reason":"Crypto trades continuously, 24 hours a day, every day.",
+ "enforced":false}
+```
+
+```json
+{"symbol":"RELIANCE","asset_class":"STOCK","calendar":"nse",
+ "status":"CLOSED","is_open":false,"is_24x7":false,
+ "timezone":"Asia/Kolkata","next_open":"2026-08-28T09:15:00+05:30",
+ "next_close":"2026-08-28T15:30:00+05:30",
+ "reason":"NSE has not opened yet today.","enforced":false}
+```
+
+`status`: `OPEN`, `PRE_OPEN`, `CLOSED`, `WEEKEND`, `HOLIDAY`.
+
+**`next_open` and `next_close` are `null` for a 24/7 market** — a continuous
+market has no boundary, and reporting "now" would invent one.
+
+**`enforced`** says whether being closed actually blocks an order
+(`ENFORCE_MARKET_HOURS`, default `false`). When false the status is
+informational and orders still fill.
+
+### 15.5 `GET /api/v1/markets/statuses`
+
+No parameters. One row per asset class, using each class's first catalogue
+instrument. Lets a client show "NSE closed, crypto open" in one request.
+
+### 15.6 Trading a coin
+
+```bash
+curl -X POST http://localhost:8000/api/v1/trading/orders \
+  -H 'Content-Type: application/json' \
+  -d '{"side":"BUY","quantity":"0.001","reference_price":"7644047.00","symbol":"BTC"}'
+```
+```json
+{"order":{"symbol":"BTC","exchange":"CRYPTO","asset_class":"CRYPTO",
+          "quantity":"0.00100000","execution_price":"7646340.36"},
+ "trade":{"brokerage":"7.65","gst":"1.38","tds":"0.00",
+          "stt":"0.00","stamp_duty":"0.00","sebi_charges":"0.00",
+          "total_charges":"9.03"},
+ "cash_delta":"-7655.37"}
+```
+
+A crypto **sell** additionally carries `tds` (1% of turnover by default). An
+equity trade always carries `"tds":"0.00"`.
+
+### 15.7 `GET /api/v1/trading/portfolio/summary`
+
+Gains `value_by_asset_class` — position value split by class. It is a
+**breakdown of one cash pool**, not separate balances:
+
+```json
+{"cash_balance":"995670.47","position_value":"3606.30",
+ "total_equity":"999276.77",
+ "value_by_asset_class":{"STOCK":"7913.94","CRYPTO":"-4307.64"},
+ "unpriced_symbols":[]}
+```
+
+### 15.8 `GET /api/v1/trading/execution-cost`
+
+Gains `symbol`; the response gains `asset_class`. Pricing a coin returns the
+crypto schedule, a share the NSE one:
+
+| | `BTC` sell | `RELIANCE` sell |
+|---|---|---|
+| `brokerage` | exchange fee | broker commission |
+| `stt`, `stamp_duty`, `sebi_charges` | `0.00` | charged |
+| `tds` | charged | `0.00` |
+
+### 15.9 WebSocket changes
+
+Same socket, same `subscribe` / `unsubscribe` messages. Crypto and equity
+subscriptions were already independent — routing is per symbol.
+
+The `subscription` frame gains asset and market fields:
+
+```json
+{"type":"subscription",
+ "data":{"symbols":["BTC"],"symbol":"BTC","exchange":"CRYPTO",
+         "company_name":"Bitcoin","asset_class":"CRYPTO",
+         "market":"Global Crypto Spot","trading_hours":"24/7",
+         "quantity_step":"0.00000001",
+         "market_status":"OPEN","market_open":true,
+         "next_open":null,"next_close":null,
+         "server_time":"2026-08-28T07:42:11.418Z"}}
+```
+
+`automatic_order` frames now carry `quantity` and `position_after` as strings.
+
+`GET /stream/status` gains `polled_symbols` (what is actually being fetched,
+including instruments polled only because a trigger is armed on them), and its
+`automation` block gains `armed_symbols`.
+
+### 15.10 Database changes
+
+Migration **`3d81f0c47b92`**:
+
+| Change | Detail |
+|---|---|
+| `quantity` `Integer` → `Numeric(28, 8)` | `orders`, `trades` (+ `closed_quantity`), `positions`, `automatic_orders`, `portfolio_snapshots` |
+| `asset_class` enum column | `orders`, `trades`, `positions`, `automatic_orders`; existing rows backfill to `STOCK` |
+| `trades.tds` | `Numeric(18, 2)`, default 0 |
+
+The widening is loss-free. The downgrade **refuses** if any fractional row
+exists rather than truncating 0.001 BTC to 0.
+
+### 15.11 Schemas added
+
+| Class | File |
+|---|---|
+| `MarketStatusResponse` | `app/schemas/markets.py` |
+| `Quantity` (plain-notation Decimal) | `app/schemas/common.py` |
+| `AssetClass`, `Instrument` fields | `app/market_data/instruments.py` |
+
+### 15.12 Frontend
+
+| File | Role |
+|---|---|
+| `types/markets.ts`, `api/markets.ts` | market-status contracts |
+| `components/terminal/MarketStatusBadge.tsx` | open/closed badge; renders, never computes |
+| `components/terminal/StockSelector.tsx` | All / Stocks / Crypto filter, grouped results |
+| `components/terminal/TradingPanel.tsx` | takes an `Instrument`; `step` and quick sizes from `quantity_step` |
+| `components/terminal/AutomaticOrderPanel.tsx` | same |
+| `utils/format.ts` | `toQuantity()`, `formatQuantity()` for Decimal strings |
+
+The instrument list and the asset filter are **never** hard-coded in React —
+both come from `GET /instruments`.

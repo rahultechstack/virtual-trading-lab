@@ -35,7 +35,7 @@ class BacktestTrade:
     index: int
     timestamp: datetime
     side: OrderSide
-    quantity: int
+    quantity: Decimal
     reference_price: Decimal
     execution_price: Decimal
 
@@ -45,9 +45,9 @@ class BacktestTrade:
 
     gross_pnl: Decimal
     net_pnl: Decimal
-    closed_quantity: int
+    closed_quantity: Decimal
 
-    position_after: int
+    position_after: Decimal
     cash_after: Decimal
     reason: str = ""
 
@@ -65,7 +65,7 @@ class EquityPoint:
     timestamp: datetime
     mark_price: Decimal
     cash: Decimal
-    position: int
+    position: Decimal
     position_value: Decimal
     total_value: Decimal
     realized_pnl: Decimal
@@ -83,7 +83,7 @@ class BacktestPortfolio:
 
     initial_cash: Decimal
     cash: Decimal = field(init=False)
-    quantity: int = 0
+    quantity: Decimal = Decimal("0")
     average_price: Decimal = Decimal("0.0000")
     realized_pnl: Decimal = ZERO
     total_charges: Decimal = ZERO

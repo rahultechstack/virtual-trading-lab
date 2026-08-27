@@ -54,7 +54,7 @@ class Decision:
 
     signal: Signal
     #: Explicit size. When None the engine's position sizer decides.
-    quantity: int | None = None
+    quantity: Decimal | None = None
     #: Why, for the trade log. Purely informational.
     reason: str = ""
 

@@ -7,6 +7,18 @@ Money precision:
 * ``Numeric(18, 4)`` for ``Position.average_price`` -- it is a *derived*
   weighted average, so it keeps two extra digits to stop rounding drift
   accumulating across many partial fills.
+
+Quantity precision:
+
+* ``Numeric(28, 8)`` for every quantity. **Not an integer**: crypto trades in
+  fractions of a unit, and 0.001 BTC is an ordinary size. Eight decimal places
+  is one satoshi, the finest division any listed instrument here has.
+  Whether a *given* instrument may use those decimals is a separate question,
+  answered by ``Instrument.quantity_step`` -- an NSE equity still trades in
+  whole shares, enforced by ``normalise_quantity``, not by the column type.
+
+Every row also carries its ``asset_class``, so a record says what it is
+without a catalogue lookup and history stays readable if the catalogue changes.
 """
 
 from datetime import datetime
@@ -19,7 +31,6 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Index,
-    Integer,
     Numeric,
     String,
     text,
@@ -27,12 +38,15 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
+from app.market_data.instruments import AssetClass
 from app.models.enums import OrderSide, OrderStatus, OrderType
 
 #: Prices and cash amounts.
 MONEY = Numeric(18, 2)
 #: Derived averages, carried at higher precision.
 AVERAGE = Numeric(18, 4)
+#: Quantities. Fractional to eight places -- see the module docstring.
+QUANTITY = Numeric(28, 8)
 
 #: Sanity bound; a paper account has no business ordering more than this.
 MAX_ORDER_QUANTITY = 10_000_000
@@ -40,6 +54,16 @@ MAX_ORDER_QUANTITY = 10_000_000
 
 def _side_enum(name: str) -> Enum:
     return Enum(OrderSide, name=name, native_enum=True, validate_strings=True)
+
+
+def _asset_class_column(**kwargs) -> Mapped[AssetClass]:
+    """The asset class column, identical on every table that carries one."""
+    return mapped_column(
+        Enum(AssetClass, name="asset_class", native_enum=True, validate_strings=True),
+        nullable=False,
+        default=AssetClass.STOCK,
+        **kwargs,
+    )
 
 
 class Order(TimestampMixin, Base):
@@ -75,6 +99,7 @@ class Order(TimestampMixin, Base):
 
     symbol: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     exchange: Mapped[str] = mapped_column(String(16), nullable=False, default="NSE")
+    asset_class: Mapped[AssetClass] = _asset_class_column(index=True)
 
     side: Mapped[OrderSide] = mapped_column(_side_enum("order_side"), nullable=False)
     order_type: Mapped[OrderType] = mapped_column(
@@ -83,7 +108,7 @@ class Order(TimestampMixin, Base):
         default=OrderType.MARKET,
     )
 
-    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)
 
     #: What the caller asked for. Informational in Stage 4.
     requested_price: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
@@ -106,7 +131,7 @@ class Order(TimestampMixin, Base):
     )
 
     @property
-    def signed_quantity(self) -> int:
+    def signed_quantity(self) -> Decimal:
         """Quantity with the sign the side implies."""
         return self.quantity * self.side.direction
 
@@ -141,9 +166,10 @@ class Trade(TimestampMixin, Base):
 
     symbol: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     exchange: Mapped[str] = mapped_column(String(16), nullable=False, default="NSE")
+    asset_class: Mapped[AssetClass] = _asset_class_column(index=True)
 
     side: Mapped[OrderSide] = mapped_column(_side_enum("order_side"), nullable=False)
-    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)
 
     #: Where the fill actually happened, after spread and slippage.
     execution_price: Mapped[Decimal] = mapped_column(MONEY, nullable=False)
@@ -184,6 +210,12 @@ class Trade(TimestampMixin, Base):
     dp_charges: Mapped[Decimal] = mapped_column(
         MONEY, nullable=False, default=Decimal("0.00"), server_default=text("0")
     )
+    #: Tax deducted at source on a Virtual Digital Asset transfer (crypto sells
+    #: only). Zero on every equity fill -- kept as its own column rather than
+    #: folded into an existing one, because it is neither a broker fee nor STT.
+    tds: Mapped[Decimal] = mapped_column(
+        MONEY, nullable=False, default=Decimal("0.00"), server_default=text("0")
+    )
     total_charges: Mapped[Decimal] = mapped_column(
         MONEY, nullable=False, default=Decimal("0.00"), server_default=text("0")
     )
@@ -200,14 +232,14 @@ class Trade(TimestampMixin, Base):
     )
 
     #: How much of the fill closed an existing position, for auditability.
-    closed_quantity: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default=text("0")
+    closed_quantity: Mapped[Decimal] = mapped_column(
+        QUANTITY, nullable=False, default=Decimal("0"), server_default=text("0")
     )
 
     order: Mapped[Order] = relationship(back_populates="trades")
 
     @property
-    def signed_quantity(self) -> int:
+    def signed_quantity(self) -> Decimal:
         return self.quantity * self.side.direction
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
@@ -244,11 +276,14 @@ class Position(TimestampMixin, Base):
         ),
     )
 
-    #: Natural key -- one row per instrument, and this platform trades one.
+    #: Natural key -- one row per instrument, across every asset class.
     symbol: Mapped[str] = mapped_column(String(32), primary_key=True)
     exchange: Mapped[str] = mapped_column(String(16), nullable=False, default="NSE")
+    asset_class: Mapped[AssetClass] = _asset_class_column(index=True)
 
-    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    quantity: Mapped[Decimal] = mapped_column(
+        QUANTITY, nullable=False, default=Decimal("0")
+    )
     average_price: Mapped[Decimal] = mapped_column(
         AVERAGE, nullable=False, default=Decimal("0.0000")
     )

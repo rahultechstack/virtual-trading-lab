@@ -9,14 +9,20 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.common import Quantity
+
 from app.models.automatic_order import (
     AutomaticOrderStatus,
     AutomaticOrderType,
     TriggerCondition,
 )
+from app.market_data.instruments import AssetClass
 from app.models.enums import OrderSide
 
 _MONEY = {"max_digits": 18, "decimal_places": 2}
+#: Fractional, so a stop-loss can protect 0.001 BTC. The instrument decides how
+#: finely, not this schema -- see the note in schemas/trading.py.
+_QUANTITY = {"max_digits": 28}
 
 
 class CreateAutomaticOrderRequest(BaseModel):
@@ -40,9 +46,18 @@ class CreateAutomaticOrderRequest(BaseModel):
     action: OrderSide = Field(
         description="Side executed when it fires: BUY, SELL, SHORT_SELL or BUY_TO_COVER."
     )
-    quantity: int = Field(gt=0, le=10_000_000, description="Shares. Positive.")
+    quantity: Decimal = Field(
+        gt=0,
+        le=10_000_000,
+        description=(
+            "Positive size. Whole units for a stock; fractional for crypto. "
+            'Send it as a string ("0.001") to avoid float rounding.'
+        ),
+        **_QUANTITY,
+    )
     symbol: str | None = Field(
-        default=None, description="Optional. Must be the configured symbol if supplied."
+        default=None,
+        description="Any supported instrument. Defaults to the configured default.",
     )
     reference_price: Decimal | None = Field(
         default=None,
@@ -64,11 +79,12 @@ class AutomaticOrderResponse(BaseModel):
     id: int
     symbol: str
     exchange: str
+    asset_class: AssetClass
     order_type: AutomaticOrderType
     trigger_price: Decimal
     trigger_condition: TriggerCondition
     action: OrderSide
-    quantity: int
+    quantity: Quantity
     status: AutomaticOrderStatus
 
     created_at: datetime

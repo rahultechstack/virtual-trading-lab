@@ -20,15 +20,20 @@ from app.trading.pnl import PnLCalculator, to_money
 
 @dataclass(frozen=True)
 class FillOutcome:
-    """What a fill did to a position."""
+    """What a fill did to a position.
 
-    new_quantity: int
+    Quantities are ``Decimal`` throughout, not ``int``: a fill may be
+    fractional. The arithmetic below is identical either way -- nothing here
+    ever depended on quantities being whole.
+    """
+
+    new_quantity: Decimal
     new_average_price: Decimal
     realized_pnl: Decimal
     #: Units of the prior position that this fill closed.
-    closed_quantity: int
+    closed_quantity: Decimal
     #: Units of new exposure this fill opened.
-    opened_quantity: int
+    opened_quantity: Decimal
 
     @property
     def is_reversal(self) -> bool:
@@ -38,9 +43,9 @@ class FillOutcome:
 
 def apply_fill(
     *,
-    quantity: int,
+    quantity: Decimal,
     average_price: Decimal,
-    fill_quantity: int,
+    fill_quantity: Decimal,
     fill_price: Decimal,
 ) -> FillOutcome:
     """Apply a signed fill to a position and report the outcome.
@@ -61,8 +66,12 @@ def apply_fill(
        position it crosses zero: the remainder opens the opposite direction at
        the fill price, and the average resets to that price.
     """
+    quantity = Decimal(quantity)
+    fill_quantity = Decimal(fill_quantity)
+    zero = Decimal("0")
+
     if fill_quantity == 0:
-        return FillOutcome(quantity, average_price, Decimal("0.00"), 0, 0)
+        return FillOutcome(quantity, average_price, Decimal("0.00"), zero, zero)
 
     # 1. Opening from flat.
     if quantity == 0:
@@ -70,7 +79,7 @@ def apply_fill(
             new_quantity=fill_quantity,
             new_average_price=fill_price,
             realized_pnl=Decimal("0.00"),
-            closed_quantity=0,
+            closed_quantity=zero,
             opened_quantity=abs(fill_quantity),
         )
 
@@ -88,7 +97,7 @@ def apply_fill(
             new_quantity=quantity + fill_quantity,
             new_average_price=new_average,
             realized_pnl=Decimal("0.00"),
-            closed_quantity=0,
+            closed_quantity=zero,
             opened_quantity=abs(fill_quantity),
         )
 
@@ -148,10 +157,12 @@ class PositionManager:
         if position is not None:
             return position
 
+        instrument = resolve_instrument(symbol)
         position = Position(
             symbol=symbol,
-            exchange=resolve_instrument(symbol).exchange,
-            quantity=0,
+            exchange=instrument.exchange,
+            asset_class=instrument.asset_class,
+            quantity=Decimal("0"),
             average_price=Decimal("0.0000"),
             realized_pnl=Decimal("0.00"),
             total_charges=Decimal("0.00"),

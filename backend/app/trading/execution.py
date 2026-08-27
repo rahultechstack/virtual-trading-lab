@@ -12,12 +12,23 @@ actual execution price from it in two adverse steps, then prices the charges:
         |  SlippageModel   the book moves against you in flight
         v
     execution price
-        |  FeeCalculator   brokerage, STT, exchange, SEBI, stamp duty, GST
-        v
+        |  FeeSchedule     chosen by ASSET CLASS -- equity charges for a stock,
+        v                  exchange fee + TDS for crypto
     Fill(price, spread_cost, slippage_cost, charges)
 
 Each of the three models is injected, so any of them can be swapped or
 switched off without touching this class -- and each is independently testable.
+
+**Fees are per asset class.** The engine holds one calculator per class and
+picks by ``Fill.asset_class``, so NSE's statutory charges never land on a
+crypto trade. Passing a single ``fees=`` calculator overrides every class,
+which is what the backtester and the cost-preview endpoint do when they want
+one explicit schedule.
+
+Spread and slippage are deliberately *not* per-class: both are expressed in
+basis points of the price, so they scale correctly for an asset worth Rs 8 or
+Rs 76,00,000 without any per-class configuration.
+
 No partial filling and no order-book matching yet; this class remains the seam
 where those would arrive.
 """
@@ -28,9 +39,10 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.market_data.instruments import AssetClass
 from app.models.enums import OrderSide
 from app.models.trading import Order, Trade
-from app.trading.fees import ChargeBreakdown, FeeCalculator
+from app.trading.fees import ChargeBreakdown, fee_calculators
 from app.trading.pnl import to_money
 from app.trading.slippage import SlippageModel
 from app.trading.spread import BidAsk, SpreadModel
@@ -40,7 +52,7 @@ from app.trading.spread import BidAsk, SpreadModel
 class Fill:
     """The outcome of executing an order, priced end to end."""
 
-    quantity: int
+    quantity: Decimal
     price: Decimal
     side: OrderSide
 
@@ -55,8 +67,12 @@ class Fill:
     #: Itemised statutory and broker charges.
     charges: ChargeBreakdown
 
+    #: Which charge schedule and market rules produced this fill. Last, with a
+    #: default, so every existing positional construction keeps working.
+    asset_class: AssetClass = AssetClass.STOCK
+
     @property
-    def signed_quantity(self) -> int:
+    def signed_quantity(self) -> Decimal:
         """Positive when the fill increases the position, negative when it reduces it."""
         return self.quantity * self.side.direction
 
@@ -88,12 +104,31 @@ class ExecutionEngine:
         *,
         spread: SpreadModel | None = None,
         slippage: SlippageModel | None = None,
-        fees: FeeCalculator | None = None,
+        fees=None,
     ) -> None:
         self._session = session
         self.spread = spread or SpreadModel.from_settings()
         self.slippage = slippage or SlippageModel.from_settings()
-        self.fees = fees or FeeCalculator.from_settings()
+        #: An explicitly injected calculator applies to EVERY asset class --
+        #: callers that pass one are asking for that exact schedule. Otherwise
+        #: each class gets its own, built from settings.
+        self._fees_override = fees
+        self._fees_by_class = None if fees is not None else fee_calculators()
+
+    def fees_for(self, asset_class: AssetClass):
+        """The charge schedule this engine applies to an asset class."""
+        if self._fees_override is not None:
+            return self._fees_override
+        return self._fees_by_class[asset_class]
+
+    @property
+    def fees(self):
+        """The equity schedule.
+
+        Kept because fees were a single object before crypto existed, and
+        callers that only ever deal in equities still read it.
+        """
+        return self.fees_for(AssetClass.STOCK)
 
     @classmethod
     def frictionless(cls, session: AsyncSession) -> "ExecutionEngine":
@@ -102,22 +137,31 @@ class ExecutionEngine:
         Fills exactly at the reference price. Used to test position accounting
         in isolation from execution costs.
         """
-        return cls(
+        engine = cls(
             session,
             spread=SpreadModel.disabled(),
             slippage=SlippageModel.disabled(),
-            fees=FeeCalculator.disabled(),
         )
+        # Every class charges nothing, rather than only equities.
+        engine._fees_override = None
+        engine._fees_by_class = fee_calculators(enabled=False)
+        return engine
 
     def price_fill(
-        self, *, side: OrderSide, quantity: int, reference_price: Decimal
+        self,
+        *,
+        side: OrderSide,
+        quantity: Decimal,
+        reference_price: Decimal,
+        asset_class: AssetClass = AssetClass.STOCK,
     ) -> Fill:
-        """Price a fill: spread, then slippage, then charges.
+        """Price a fill: spread, then slippage, then the asset's charges.
 
         Pure -- it decides the fill but writes nothing and touches no ORM
         object. That is what lets the backtester price its fills through
         exactly this code path rather than a parallel implementation.
         """
+        quantity = Decimal(quantity)
         direction = side.direction
 
         spread = self.spread.apply(
@@ -128,7 +172,7 @@ class ExecutionEngine:
         )
         execution_price = slippage.slipped_price
 
-        charges = self.fees.calculate(
+        charges = self.fees_for(asset_class).calculate(
             side=side, quantity=quantity, price=execution_price
         )
 
@@ -136,6 +180,7 @@ class ExecutionEngine:
             quantity=quantity,
             price=execution_price,
             side=side,
+            asset_class=asset_class,
             reference_price=reference_price,
             quote=spread.quote,
             spread_cost=spread.cost,
@@ -144,11 +189,16 @@ class ExecutionEngine:
         )
 
     def execute(self, order: Order, reference_price: Decimal) -> Fill:
-        """Price the fill for a persisted order."""
+        """Price the fill for a persisted order.
+
+        The asset class comes off the order row, so the charge schedule is
+        decided by what was traded rather than by any ambient default.
+        """
         return self.price_fill(
             side=order.side,
             quantity=order.quantity,
             reference_price=reference_price,
+            asset_class=order.asset_class,
         )
 
     async def record_trade(
@@ -157,7 +207,7 @@ class ExecutionEngine:
         order: Order,
         fill: Fill,
         gross_pnl: Decimal,
-        closed_quantity: int,
+        closed_quantity: Decimal,
     ) -> Trade:
         """Persist the fill with its full cost breakdown.
 
@@ -169,6 +219,7 @@ class ExecutionEngine:
             order_id=order.id,
             symbol=order.symbol,
             exchange=order.exchange,
+            asset_class=order.asset_class,
             side=fill.side,
             quantity=fill.quantity,
             execution_price=fill.price,
@@ -184,6 +235,7 @@ class ExecutionEngine:
             stamp_duty=charges.stamp_duty,
             gst=charges.gst,
             dp_charges=charges.dp_charges,
+            tds=charges.tds,
             total_charges=charges.total,
             gross_pnl=gross_pnl,
             net_pnl=to_money(gross_pnl - charges.total),

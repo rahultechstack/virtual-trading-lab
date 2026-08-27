@@ -14,8 +14,18 @@ it decides from ``capabilities.supports_live_stream``:
   *polled frequently*, and the payload says so via ``is_delayed`` and
   ``mode``.
 
-Polling pauses whenever no client is connected, so an idle browser tab does
-not burn upstream rate limit.
+Polling pauses whenever no client is connected **and** nothing is armed, so an
+idle server makes no upstream calls at all. An instrument with an ACTIVE
+automatic order keeps being polled regardless of who is watching -- otherwise a
+crypto stop-loss set on Friday would sit inert all weekend, which would make a
+24/7 market pointless. See ``symbols_to_poll``.
+
+Each symbol is fetched from the provider routed for **its own asset class**, so
+an equity and a crypto subscription on the same socket are served by different
+feeds without the stream knowing anything about either. Routing is opt-in
+(``route_by_asset_class``): the process-wide stream turns it on, while a
+caller that injects one provider -- a test, or a single-feed deployment --
+keeps that provider for every symbol.
 
 Failures are contained: an upstream error is broadcast as an error frame and
 the loop keeps running with a backoff, rather than tearing the stream down.
@@ -72,6 +82,7 @@ class PriceStreamService:
         exchange: str,
         poll_interval_seconds: float = 5.0,
         model_bid_ask: bool = True,
+        route_by_asset_class: bool = False,
     ) -> None:
         self._provider = provider
         self._manager = manager
@@ -79,6 +90,9 @@ class PriceStreamService:
         self._exchange = exchange
         self._poll_interval = poll_interval_seconds
         self._model_bid_ask = model_bid_ask
+        #: Off by default so an injected provider serves every symbol. The
+        #: process-wide stream turns it on; see get_price_stream().
+        self._route_by_asset_class = route_by_asset_class
 
         self._spread = SpreadModel.from_settings()
         self._scheduler: AsyncIOScheduler | None = None
@@ -108,11 +122,56 @@ class PriceStreamService:
     def symbols_to_poll(self) -> list[str]:
         """Which instruments to fetch this cycle.
 
-        Exactly what clients asked for; the default instrument only when nobody
-        has subscribed to anything, which keeps a bare client working.
+        The union of two independent reasons to want a price:
+
+        1. **Somebody is watching.** Exactly what clients subscribed to; the
+           default instrument when a client has subscribed to nothing, which
+           keeps a bare client working.
+        2. **Something is armed.** Any instrument with an ACTIVE automatic
+           order, so triggers keep being evaluated with every browser closed.
+
+        Empty when neither applies -- an idle server makes no upstream calls.
         """
-        subscribed = self._manager.subscribed_symbols()
-        return sorted(subscribed) if subscribed else [self._symbol.upper()]
+        wanted: set[str] = set()
+
+        if self._manager.has_listeners:
+            subscribed = self._manager.subscribed_symbols()
+            wanted |= subscribed if subscribed else {self._symbol.upper()}
+
+        wanted |= self.automation_symbols()
+        return sorted(wanted)
+
+    def provider_for_symbol(self, symbol: str) -> MarketDataProvider:
+        """The feed that serves one symbol.
+
+        With routing off, the provider this service was built with serves
+        everything -- which is what a caller injecting a single feed means.
+        With it on, each instrument is served by the feed configured for its
+        asset class, so a crypto symbol is never priced off the equity feed.
+        """
+        if not self._route_by_asset_class:
+            return self._provider
+
+        from app.market_data.instruments import instrument_registry
+        from app.market_data.router import provider_for
+
+        instrument = instrument_registry.get(symbol)
+        return provider_for(instrument) if instrument else self._provider
+
+    @staticmethod
+    def automation_symbols() -> set[str]:
+        """Instruments that must be priced because a trigger is armed on them.
+
+        Read from the monitor's cache rather than the database: this runs on
+        every poll cycle, and the cache is refreshed by the evaluation path and
+        invalidated whenever an order is created or cancelled.
+        """
+        if not settings.STREAM_POLL_FOR_AUTOMATION:
+            return set()
+
+        from app.automation.monitor import get_automatic_order_monitor
+
+        return set(get_automatic_order_monitor().armed_symbols())
 
     # -- introspection ---------------------------------------------------
 
@@ -138,6 +197,7 @@ class PriceStreamService:
             "is_delayed": capabilities.is_delayed,
             "symbol": self._symbol,
             "subscribed_symbols": sorted(self._manager.subscribed_symbols()),
+            "polled_symbols": self.symbols_to_poll(),
             "exchange": self._exchange,
             "poll_interval_seconds": self._poll_interval,
             "connections": self._manager.connection_count,
@@ -237,17 +297,16 @@ class PriceStreamService:
         Polls every subscribed instrument. One symbol failing does not stop the
         others: each is fetched and reported independently.
         """
-        if not self._manager.has_listeners:
-            # Nobody is listening; do not spend rate limit.
-            return
-
         from app.market_data.instruments import instrument_registry
 
         for symbol in self.symbols_to_poll():
             instrument = instrument_registry.get(symbol)
             exchange = instrument.exchange if instrument else self._exchange
+            # Each instrument is priced by the feed serving ITS asset class.
+            # The stream itself knows nothing about stocks or crypto.
+            provider = self.provider_for_symbol(symbol)
             try:
-                quote = await self._provider.get_current_quote(symbol, exchange)
+                quote = await provider.get_current_quote(symbol, exchange)
             except MarketDataError as exc:
                 await self._handle_failure(exc, symbol=symbol)
                 continue
@@ -391,12 +450,15 @@ def get_price_stream() -> PriceStreamService:
         from app.market_data.registry import get_provider
 
         _service = PriceStreamService(
+            # The equity feed is the default; per-asset-class routing below
+            # sends a crypto symbol to the crypto feed instead.
             provider=get_provider(),
             manager=get_connection_manager(),
             symbol=settings.TRADING_SYMBOL,
             exchange=settings.TRADING_EXCHANGE,
             poll_interval_seconds=settings.STREAM_POLL_INTERVAL_SECONDS,
             model_bid_ask=settings.STREAM_MODEL_BID_ASK,
+            route_by_asset_class=True,
         )
     return _service
 

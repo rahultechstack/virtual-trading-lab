@@ -3840,3 +3840,335 @@ constant.
   filter. Correct as a total, but there is no per-stock performance page.
 * **One wallet, no per-stock cash segregation** — by design.
 * **Backtests run one instrument at a time** (`BacktestRequest.symbol`).
+
+---
+
+## 20. Multi-Asset Architecture (Stocks and Crypto)
+
+Supersedes the single-asset-class assumption in §19. The platform trades **NSE
+equities and cryptocurrencies** against one virtual wallet.
+
+### 20.1 The dispatch chain
+
+Nothing in this system branches on a symbol. An instrument is resolved once,
+and its **asset class** selects everything that differs:
+
+```
+                        Instrument
+                            |
+                            v
+                       AssetClass
+        +---------+---------+---------+-----------+
+        |         |         |         |           |
+        v         v         v         v           v
+  MarketCalendar  Provider  Quantity  FeeSchedule  exchange code
+  app/markets/    router.py rules     fees.py      on every row
+        |         |         |         |
+  when it may   where the  what sizes  what it
+  be traded     price      are legal   costs
+                comes from
+```
+
+| Layer | Table | STOCK | CRYPTO |
+| ----- | ----- | ----- | ------ |
+| Calendar | `app/markets/registry.py::_BUILDERS` | `NSEMarketCalendar` | `CryptoMarketCalendar` |
+| Provider | `app/market_data/router.py` | `MARKET_DATA_PROVIDER` | `CRYPTO_MARKET_DATA_PROVIDER` |
+| Quantity | `Instrument.quantity_step` | `1` | `0.00000001` |
+| Fees | `app/trading/fees.py::_FEE_BUILDERS` | `FeeCalculator` | `CryptoFeeCalculator` |
+
+**Adding ETF or INDEX** means adding an `AssetClass` member and one entry in
+each of those four tables. The trading engine, the execution engine, the
+position accounting and the portfolio valuation do not change — none of them
+knows an asset class exists beyond passing it through.
+
+There is no `if symbol == "BTC"` anywhere in the codebase.
+
+### 20.2 The instrument model
+
+```python
+@dataclass(frozen=True)
+class Instrument:
+    symbol: str            # "BTC"        "RELIANCE"
+    company_name: str      # "Bitcoin"    "Reliance Industries"
+    asset_class: AssetClass  # CRYPTO     STOCK
+    exchange: str          # "CRYPTO"     "NSE"
+    market: str            # "Global Crypto Spot"  "NSE Cash Market"
+    trading_hours: str     # "24/7"       "09:15-15:30 IST, Mon-Fri"
+    instrument_type: InstrumentType  # CRYPTOCURRENCY  EQUITY
+    quantity_step: Decimal # 0.00000001   1
+```
+
+`AssetClass` is the **dispatch key**; `InstrumentType` is the finer user-facing
+label. Two levels because a future ETF would share `STOCK`'s calendar while
+wanting its own fee rules.
+
+Crypto carries `exchange = "CRYPTO"` — the platform's own code for the global
+spot market. It lands on every order, trade, position and automatic-order row,
+because crypto has no listing venue and inventing one would be a lie.
+
+### 20.3 Market calendars
+
+```
+app/markets/
+    calendar.py     MarketCalendar (ABC), NSEMarketCalendar, CryptoMarketCalendar
+    registry.py     calendar_for(instrument) -- the only asset-class -> calendar map
+```
+
+```python
+class MarketCalendar(ABC):
+    def is_market_open(at=None) -> bool
+    def next_open(after=None) -> datetime | None
+    def next_close(after=None) -> datetime | None
+    def trading_status(at=None) -> MarketSession
+```
+
+`TradingStatus`: `OPEN`, `PRE_OPEN`, `CLOSED`, `WEEKEND`, `HOLIDAY`.
+
+**No trading-schedule logic exists in any API route or React component.** They
+ask a calendar, or render what the backend already resolved.
+
+| | NSE | Crypto |
+| --- | --- | --- |
+| Days | Mon-Fri, minus holidays | every day |
+| Hours | 09:15-15:30 IST | every hour |
+| Pre-open | 09:00-09:15 → `PRE_OPEN`, **not** tradable | n/a |
+| `next_open` / `next_close` | the next boundary | **`None`** |
+
+`None` is the honest answer for a continuous market. Returning "now" would
+invent a boundary that does not exist.
+
+`CryptoMarketCalendar` has no code path to a weekday check or a holiday list —
+its independence from NSE is structural, not a configuration choice.
+
+**Timezones.** Every calculation is timezone-aware and a naive datetime is read
+as **UTC**, never as server-local time, so the same call cannot answer
+differently on two machines.
+
+### 20.4 NSE holidays are configuration, not code
+
+`NSE_HOLIDAYS` ships only **fixed-date national holidays** (Republic Day,
+Maharashtra Day, Independence Day, Gandhi Jayanti, Christmas).
+
+⚠️ **India's exchange holiday list is published annually by NSE and most of it
+moves year to year** — Diwali, Holi, Eid, Muhurat trading and others follow
+lunar calendars and cannot be derived. They are deliberately **not guessed at**.
+Set the list from the official NSE circular each year:
+
+```bash
+NSE_HOLIDAYS=2026-01-26,2026-03-04,2026-08-15,2026-10-02,2026-11-09
+```
+
+An out-of-date list means the calendar reports OPEN on a day the exchange was
+shut. With `ENFORCE_MARKET_HOURS` off (the default) that is cosmetic; with it
+on, it would wrongly permit an order.
+
+### 20.5 Market hours and the trading engine
+
+`TradingEngine._require_open_market(instrument)` asks the instrument's calendar
+before every order.
+
+**`ENFORCE_MARKET_HOURS` defaults to `False`.** This is a paper-trading lab:
+being able to practise an order at 9pm is the point rather than a mistake, and
+every pre-existing test places orders with no regard for the clock. Turning it
+on simulates a real broker. The calendar is consulted and reported either way —
+the setting only decides whether being closed is fatal.
+
+Crypto passes at every hour regardless, with no crypto-specific branch: its
+calendar simply returns True.
+
+### 20.6 Fractional quantities
+
+The single largest schema change. `quantity` was `Integer`; it is now
+`Numeric(28, 8)` on `orders`, `trades` (and `closed_quantity`), `positions`,
+`automatic_orders` and `portfolio_snapshots`.
+
+Eight decimal places is one satoshi. **Whether a given instrument may use those
+decimals is not decided by the column type** — it is decided by
+`Instrument.quantity_step` and enforced in exactly one function:
+
+```python
+normalise_quantity(instrument, quantity) -> Decimal
+    RELIANCE, "0.5"        -> InvalidQuantityError  (trades in whole units)
+    BTC,      "0.001"      -> Decimal("0.001")
+    BTC,      "0.000000001"-> InvalidQuantityError  (finer than one satoshi)
+```
+
+Returned **exact, never rounded**: silently snapping 0.15 shares to 0 or 1
+would trade a size the caller did not ask for.
+
+A float is converted via `str`, so `0.1` becomes exactly `Decimal("0.1")` and
+binary-float noise never reaches the ledger.
+
+**On the wire** quantities are JSON **strings**, like money, because a double
+does not carry eight decimal places exactly. They are serialised in plain
+notation (`0.00000001`, not `1E-8`) via `app/schemas/common.py::Quantity` —
+scientific notation reads as an error and cannot be used as an HTML input step.
+
+Prices remain `Numeric(18, 2)`. See §20.12 for what that excludes.
+
+### 20.7 Crypto fees — **simulated, and configurable**
+
+`CryptoFeeCalculator` in `app/trading/fees.py`.
+
+⚠️ **No crypto exchange has been integrated, so these are configurable
+assumptions rather than any venue's published schedule.** Point them at
+whichever exchange you want to model.
+
+| Charge | Setting | Default | Applies |
+| ------ | ------- | ------- | ------- |
+| Exchange trading fee | `CRYPTO_FEE_PERCENT` | 0.10% of turnover | both sides |
+| GST on that fee | `CRYPTO_GST_PERCENT` | 18% of the fee | both sides |
+| TDS (s.194S) | `CRYPTO_TDS_PERCENT` | 1% of turnover | **sell side only** |
+
+TDS is the one item that is **not** an assumption: India withholds tax at
+source on the transfer of a Virtual Digital Asset. That is why it is modelled
+explicitly, in its own `trades.tds` column, rather than folded into the fee.
+Set it to `0` to disable.
+
+**Never applied to crypto:** STT, stamp duty, the SEBI turnover fee, exchange
+transaction charges and DP charges. Those are securities-market charges with no
+crypto analogue, and applying them would be simply wrong.
+
+The exchange fee lands in `trades.brokerage` — it plays the same role a
+broker's commission does on an equity fill.
+
+Spread and slippage are deliberately **not** per-class: both are basis points
+of the price, so they scale correctly for an asset worth ₹8 or ₹76,00,000.
+
+### 20.8 Crypto market data
+
+**The equity provider was not assumed to serve crypto — it was probed.**
+
+Yahoo's chart endpoint serves `BTC-INR`, `ETH-INR` and the other listed pairs
+with `instrumentType: CRYPTOCURRENCY`, `currency: INR` and continuous 1m–1mo
+OHLCV, including bars through weekends and overnight where an NSE symbol has
+none. Since it is the same transport, `YahooCryptoProvider` reuses
+`YahooChartProvider` for HTTP and parsing and overrides only what is genuinely
+crypto-specific.
+
+```
+app/market_data/
+    yahoo.py    YahooChartProvider (shared)
+                  |-- YahooFinanceProvider   "<SYMBOL>.NS"    equities
+    crypto.py     +-- YahooCryptoProvider    "<SYMBOL>-INR"   crypto
+    router.py   provider_for(instrument) -- the seam
+```
+
+**INR pairs, deliberately.** `BTC-INR` rather than `BTC-USD` keeps one currency
+across the whole portfolio. A USD pair would need an FX rate on every
+valuation, and a wrong or stale rate would silently corrupt P&L for the crypto
+half of the account.
+
+**Swapping in a real exchange feed** (Binance, CoinDCX, WazirX): write a class
+satisfying `MarketDataProvider`, add one entry to `_PROVIDERS`, set
+`CRYPTO_MARKET_DATA_PROVIDER`. If it has a push socket, override
+`subscribe_live_data` and the stream runs in PUSH mode for crypto while
+equities stay on POLL. Nothing else changes.
+
+⚠️ **Routing must not be bypassed.** The equity feed resolves a bare `BTC` to
+an unrelated US-listed security and returns ~$35. `get_market_data_service`
+therefore builds the service with **no** provider so routing applies; a
+provider is honoured only when `get_provider` has been explicitly overridden
+(which is how tests substitute a fake). Regression-tested.
+
+### 20.9 Real-time crypto prices
+
+Crypto prices reach the browser over the **existing** WebSocket. Subscriptions
+were already per-symbol (§19.5), so crypto and equity subscriptions are
+independent by construction — a client watching BTC is never sent RELIANCE
+ticks, and each symbol is fetched from the feed routed for its own asset class.
+
+The `subscription` frame now carries `asset_class`, `market`, `trading_hours`,
+`quantity_step`, `market_status`, `market_open`, `next_open` and `next_close`,
+so the UI adapts on a switch without a second request.
+
+⚠️ **Upstream is polled, not pushed.** The configured crypto feed has no public
+push socket, so "continuous" means *polled on `STREAM_POLL_INTERVAL_SECONDS`*,
+day and night. Ticks say so via `mode: "poll"`. A provider with a real socket
+would make the stream run in PUSH mode without any other change.
+
+**Triggers stay armed with no browser open.** `STREAM_POLL_FOR_AUTOMATION`
+(default on) keeps polling any instrument with an ACTIVE automatic order, even
+with zero connected clients — otherwise a crypto stop-loss set on Friday would
+sit inert all weekend, defeating the purpose of a 24/7 market. The monitor
+caches *which symbols* are armed, so this costs no extra query. With nothing
+armed and nobody watching, `symbols_to_poll()` is empty and no upstream call is
+made at all.
+
+### 20.10 Multi-asset portfolio
+
+One wallet funds every asset class. There is no per-class cash segregation, by
+design.
+
+```
+Cash                    ₹9,95,670.47
+Positions:
+  RELIANCE  STOCK    0
+  TCS       STOCK    5
+  INFY      STOCK   -3
+  BTC       CRYPTO   0.00100000
+  ETH       CRYPTO  -0.05000000
+```
+
+`PortfolioValuation.value_by_asset_class()` splits position value by class —
+a **breakdown of one pool**, not separate balances. Surfaced on
+`GET /trading/portfolio/summary`.
+
+Every P&L figure sums across both classes. An open position with no supplied
+mark contributes zero and is named in `unpriced_symbols`, never guessed at.
+
+### 20.11 Backtesting
+
+The engine iterates the bars it is given and asserts **nothing** about when
+they occur: no weekday filter, no session check, no 252-day annualisation
+anywhere in it or in `results.py`. A 24/7 crypto series with Saturday and
+Sunday bars therefore runs correctly with no special case.
+
+Two things do come from the instrument:
+
+* **Sizing.** `PositionSizer` rounds **down** to `quantity_step`. This fixed a
+  real defect: percent-of-equity sizing on BTC computed `int(950000 / 7600000)`
+  = **0**, so a crypto backtest never traded at all. It now sizes `0.125` BTC.
+  Rounding down, not to nearest, so an order never exceeds its budget.
+* **Charges.** Fills are priced with the fee schedule for the asset class, so a
+  crypto backtest is not charged STT.
+
+`BacktestResult` records `asset_class` and `trading_calendar`, so a reader can
+tell a 24/7 run from a session-bound one and does not read a Saturday bar as an
+error. NSE backtests are unchanged.
+
+### 20.12 Known limitations
+
+* **Sub-paisa assets are excluded.** Prices are `Numeric(18, 2)`, so an asset
+  trading below ₹0.01 — SHIB at roughly ₹0.0005 — cannot be represented without
+  rounding to zero. Such assets are left out of the catalogue rather than
+  listed and silently broken, and the provider raises rather than returning
+  `0.00`. Widening the price columns is the change that would admit them.
+* **The crypto catalogue is curated** (13 coins), for the same reason the
+  equity one is: no provider offers instrument discovery. Every entry is
+  verified against the live feed by a `network`-marked test.
+* **Prices are a cross-exchange composite**, not one venue's order book. No
+  single exchange's fills would match them exactly.
+* **No bid/ask for crypto.** The feed carries no depth, so the stream models
+  the spread and labels it `modelled`.
+* **Crypto fees are assumptions.** See §20.7.
+* **No margin, no funding rate, no liquidation.** Short proceeds are credited
+  as spendable cash and nothing is reserved against an open short — the
+  pre-existing gap noted in `app/trading/portfolio.py`, now reachable on an
+  asset class where perpetual funding would be a real cost.
+* **This is a simulation, not a broker.** No order reaches any exchange or
+  crypto venue. Fills are modelled from a reference price by the spread and
+  slippage models.
+
+### 20.13 Adding an asset class
+
+1. Add the member to `AssetClass` in `app/market_data/instruments.py`.
+2. Add its instruments, with the right `quantity_step` and `exchange`.
+3. Register a calendar in `app/markets/registry.py::_BUILDERS`.
+4. Register a fee schedule in `app/trading/fees.py::_FEE_BUILDERS`.
+5. Register a provider in `app/market_data/registry.py::_PROVIDERS` and route
+   it in `app/market_data/router.py`.
+6. Add an enum value in a migration (`asset_class` is a native PG enum).
+
+The trading engine, execution engine, position accounting, portfolio
+valuation, automation and WebSocket layers need no change.

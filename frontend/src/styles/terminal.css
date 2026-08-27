@@ -1088,3 +1088,109 @@ select.field__input:disabled {
     min-width: 100%;
   }
 }
+
+/* ==========================================================================
+   Asset classes and market status
+   ==========================================================================
+   Added with crypto support. The colour is the only thing that distinguishes
+   an asset class in the UI -- every behavioural difference (step size, fees,
+   trading hours) comes from the backend, never from a class name here.
+   ========================================================================== */
+
+.asset-tag {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.asset-tag--stock {
+  color: var(--accent, #6ea8fe);
+  border-color: color-mix(in srgb, var(--accent, #6ea8fe) 40%, transparent);
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 12%, transparent);
+}
+
+.asset-tag--crypto {
+  color: #f0b429;
+  border-color: color-mix(in srgb, #f0b429 40%, transparent);
+  background: color-mix(in srgb, #f0b429 12%, transparent);
+}
+
+/* Filter tabs inside the instrument picker. */
+.stock-selector__filters {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0.35rem 0.5rem 0.5rem;
+  border-bottom: 1px solid var(--border, #23262d);
+}
+
+.stock-selector__group {
+  list-style: none;
+}
+
+.stock-selector__group-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.stock-selector__group-heading {
+  margin: 0;
+  padding: 0.45rem 0.65rem 0.2rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  position: sticky;
+  top: 0;
+  background: var(--panel, #14161a);
+}
+
+/* Market open/closed badge, beside the instrument picker. */
+.market-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.market-status__dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.market-status--positive {
+  color: var(--positive, #3ddc97);
+}
+
+.market-status--warning {
+  color: #f0b429;
+}
+
+.market-status--muted {
+  color: var(--muted, #8b909a);
+}
+
+.market-status__label {
+  font-weight: 600;
+}
+
+.market-status__detail {
+  font-weight: 400;
+}
+
+/* The instrument row now holds the picker AND the market badge. */
+.terminal__instrument {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}

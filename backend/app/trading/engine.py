@@ -13,6 +13,17 @@ Independent by construction: it imports no market-data provider and no web
 framework. Execution prices are supplied by the caller, so the engine can be
 driven equally by an HTTP endpoint, a backtest harness or a test.
 
+**Asset-class awareness.** The engine never inspects a symbol. It resolves the
+instrument once, then that instrument answers every question that used to have
+a single hard-coded answer:
+
+    instrument.exchange        which venue the row records
+    instrument.asset_class     which fee schedule and calendar apply
+    instrument.quantity_step   whether 0.001 is a legal size
+    calendar_for(instrument)   whether the market is open right now
+
+Adding an asset class therefore adds rows to those tables, not branches here.
+
 **Atomicity.** A filled order writes to four tables -- orders, trades,
 positions and wallet. All of it happens inside one transaction, and the wallet
 and position rows are locked with ``SELECT ... FOR UPDATE`` before anything is
@@ -30,12 +41,19 @@ from app.core.config import settings
 from app.core.exceptions import (
     InvalidOrderError,
     InvalidPositionOperationError,
+    MarketClosedError,
     TradingError,
     UnsupportedSymbolError,
     WalletNotFoundError,
 )
 from app.core.logging import get_logger
-from app.market_data.instruments import resolve_instrument, resolve_symbol
+from app.market_data.instruments import (
+    Instrument,
+    normalise_quantity,
+    resolve_instrument,
+    resolve_symbol,
+)
+from app.markets.registry import calendar_for
 from app.models.enums import OrderSide, OrderStatus, OrderType
 from app.models.trading import MAX_ORDER_QUANTITY, Order, Position, Trade
 from app.repositories.wallet_repository import WalletRepository
@@ -90,7 +108,7 @@ class TradingEngine:
         self,
         *,
         side: OrderSide,
-        quantity: int,
+        quantity,
         reference_price: Decimal,
         symbol: str | None = None,
         requested_price: Decimal | None = None,
@@ -99,22 +117,35 @@ class TradingEngine:
 
         Args:
             side: BUY, SELL, SHORT_SELL or BUY_TO_COVER.
-            quantity: Positive number of shares.
+            quantity: Positive size. Whole units for a stock; fractional for
+                crypto, down to the instrument's ``quantity_step``. Accepts an
+                int, a ``Decimal`` or a numeric string -- a float is converted
+                via ``str`` so binary-float noise never reaches the ledger.
             reference_price: Mid price to trade around. The execution price is
                 derived from it by the spread and slippage models, both
                 adverse, so the fill is never better than this.
-            symbol: Must be the configured instrument if given.
+            symbol: Any instrument in the supported universe. Defaults to the
+                configured default instrument.
             requested_price: Recorded for audit; does not affect the fill.
 
         Raises:
-            InvalidOrderError: malformed quantity, price or symbol.
+            UnsupportedSymbolError: symbol outside the supported universe.
+            InvalidQuantityError: size not positive, or off the instrument's
+                tradable increment (0.5 shares, or sub-satoshi crypto).
+            MarketClosedError: the instrument's market is shut and
+                ENFORCE_MARKET_HOURS is on. Crypto never raises this.
+            InvalidOrderError: malformed price, or size beyond the bound.
             InvalidPositionOperationError: a closing-only side that would do
                 more than close.
             InsufficientFundsError: the wallet cannot fund the order.
             WalletNotFoundError: the wallet has not been initialised.
         """
-        resolved_symbol = self._resolve_symbol(symbol)
+        instrument = resolve_instrument(symbol)
+        resolved_symbol = instrument.symbol
+        # The instrument decides what a legal size is -- not this method.
+        quantity = normalise_quantity(instrument, quantity)
         self._validate_request(quantity, reference_price)
+        self._require_open_market(instrument)
 
         # Lock both mutable rows before reading anything from them, so a
         # concurrent order cannot interleave between read and write.
@@ -125,7 +156,8 @@ class TradingEngine:
 
         order = await self.orders.create(
             symbol=resolved_symbol,
-            exchange=self._resolve_exchange(resolved_symbol),
+            exchange=instrument.exchange,
+            asset_class=instrument.asset_class,
             side=side,
             quantity=quantity,
             requested_price=requested_price,
@@ -218,14 +250,19 @@ class TradingEngine:
         )
 
     async def get_position(self, symbol: str | None = None) -> Position:
-        """Current position, materialised flat if never traded."""
-        resolved = self._resolve_symbol(symbol)
-        position = await self.positions.get(resolved)
+        """Current position, materialised flat if never traded.
+
+        The materialised row is deliberately NOT persisted -- looking at an
+        instrument is not trading it.
+        """
+        instrument = resolve_instrument(symbol)
+        position = await self.positions.get(instrument.symbol)
         if position is None:
             position = Position(
-                symbol=resolved,
-                exchange=self._resolve_exchange(resolved),
-                quantity=0,
+                symbol=instrument.symbol,
+                exchange=instrument.exchange,
+                asset_class=instrument.asset_class,
+                quantity=Decimal("0"),
                 average_price=Decimal("0.0000"),
                 realized_pnl=Decimal("0.00"),
                 total_charges=Decimal("0.00"),
@@ -301,9 +338,42 @@ class TradingEngine:
         return resolve_instrument(symbol).exchange
 
     @staticmethod
-    def _validate_request(quantity: int, reference_price: Decimal) -> None:
-        if quantity <= 0:
-            raise InvalidOrderError(f"Quantity must be positive, got {quantity}.")
+    def _require_open_market(instrument: Instrument) -> None:
+        """Refuse an order while the instrument's market is shut.
+
+        Off by default (``ENFORCE_MARKET_HOURS``), because this is a paper
+        trading lab and practising an order at 9pm is the point rather than a
+        mistake. The calendar is consulted and reported regardless -- the
+        setting only decides whether being closed is fatal.
+
+        The engine asks the instrument's own calendar, so crypto passes at
+        every hour of every day without a single crypto-specific branch here.
+        """
+        if not settings.ENFORCE_MARKET_HOURS:
+            return
+
+        session = calendar_for(instrument).trading_status()
+        if session.is_open:
+            return
+
+        reopens = (
+            f" It reopens at {session.next_open.isoformat()}."
+            if session.next_open is not None
+            else ""
+        )
+        raise MarketClosedError(
+            f"{instrument.symbol} cannot be traded right now: {session.reason}"
+            f"{reopens}"
+        )
+
+    @staticmethod
+    def _validate_request(quantity: Decimal, reference_price: Decimal) -> None:
+        """Bounds that hold for every asset class.
+
+        Positivity and step size are already settled by ``normalise_quantity``,
+        which knows the instrument; only the absolute bound and the price
+        remain.
+        """
         if quantity > MAX_ORDER_QUANTITY:
             raise InvalidOrderError(
                 f"Quantity {quantity} exceeds the maximum of {MAX_ORDER_QUANTITY}."
@@ -315,7 +385,7 @@ class TradingEngine:
 
     @staticmethod
     def _validate_against_position(
-        side: OrderSide, quantity: int, position: Position
+        side: OrderSide, quantity: Decimal, position: Position
     ) -> None:
         """Enforce the intent of closing-only sides.
 

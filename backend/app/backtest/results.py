@@ -1,5 +1,12 @@
 """Backtest metrics.
 
+Every metric here is computed from the **bars actually supplied**, never from a
+calendar assumption. Nothing divides by 252 trading days, annualises against a
+weekday count, or filters bars by weekday, so a 24/7 crypto series and a
+Mon-Fri equity series are both measured correctly by the same code. The result
+records which calendar the instrument trades under so a reader can tell them
+apart.
+
 The win/loss rules match the live ``PerformanceAnalyzer`` exactly, so a
 backtest and a real account are measured the same way:
 
@@ -41,6 +48,11 @@ class BacktestResult:
     strategy: str
     symbol: str
     exchange: str
+    #: Which asset class was backtested. A crypto run has NO weekday or session
+    #: assumption anywhere in it -- see the module docstring.
+    asset_class: str
+    #: The market calendar the instrument trades under: "nse" or "crypto".
+    trading_calendar: str
     interval: str
 
     start_at: datetime | None
@@ -74,7 +86,7 @@ class BacktestResult:
     #: Bars spent holding a position, as a percentage of the run.
     exposure_pct: Decimal
     rejected_orders: int
-    final_position: int
+    final_position: Decimal
 
     trades: list[BacktestTrade]
     equity_curve: list[EquityPoint]
@@ -132,7 +144,9 @@ def summarise(
     trades: list[BacktestTrade],
     curve: list[EquityPoint],
     rejected_orders: int,
-    final_position: int,
+    final_position: Decimal,
+    asset_class: str = "STOCK",
+    trading_calendar: str = "nse",
 ) -> BacktestResult:
     """Turn the raw run into the reported metrics."""
     closing = [trade for trade in trades if trade.is_closing]
@@ -152,6 +166,8 @@ def summarise(
         strategy=strategy,
         symbol=symbol,
         exchange=exchange,
+        asset_class=asset_class,
+        trading_calendar=trading_calendar,
         interval=interval,
         start_at=curve[0].timestamp if curve else None,
         end_at=curve[-1].timestamp if curve else None,

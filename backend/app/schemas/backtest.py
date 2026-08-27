@@ -6,6 +6,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.common import Quantity
+
 from app.backtest.engine import FillTiming, SizingMode
 from app.models.enums import OrderSide
 from app.schemas.market_data import Interval
@@ -56,7 +58,17 @@ class BacktestRequest(BaseModel):
     )
     sizing_mode: SizingMode = SizingMode.PERCENT_OF_EQUITY
     equity_percent: Decimal = Field(default=Decimal("95"), gt=0, le=100)
-    fixed_quantity: int = Field(default=100, ge=1, le=10_000_000)
+    fixed_quantity: Decimal = Field(
+        default=Decimal("100"),
+        gt=0,
+        le=10_000_000,
+        max_digits=28,
+        decimal_places=8,
+        description=(
+            "Used by FIXED_QUANTITY sizing. Fractional for crypto; rounded "
+            "down to the instrument's tradable increment."
+        ),
+    )
     fixed_value: Decimal = Field(
         default=Decimal("100000.00"), gt=0, max_digits=18, decimal_places=2
     )
@@ -71,7 +83,7 @@ class BacktestTradeSchema(BaseModel):
     index: int
     timestamp: datetime
     side: OrderSide
-    quantity: int
+    quantity: Quantity
     reference_price: Decimal
     execution_price: Decimal
     spread_cost: Decimal
@@ -79,8 +91,8 @@ class BacktestTradeSchema(BaseModel):
     total_charges: Decimal
     gross_pnl: Decimal
     net_pnl: Decimal
-    closed_quantity: int
-    position_after: int
+    closed_quantity: Quantity
+    position_after: Quantity
     cash_after: Decimal
     reason: str
 
@@ -91,7 +103,7 @@ class EquityPointSchema(BaseModel):
     timestamp: datetime
     mark_price: Decimal
     cash: Decimal
-    position: int
+    position: Quantity
     position_value: Decimal
     total_value: Decimal
     realized_pnl: Decimal
@@ -111,6 +123,13 @@ class BacktestResultSchema(BaseModel):
     strategy: str
     symbol: str
     exchange: str
+    asset_class: str = Field(description="STOCK or CRYPTO.")
+    trading_calendar: str = Field(
+        description=(
+            'Calendar the instrument trades under: "nse" or "crypto". '
+            "A crypto run legitimately contains weekend bars."
+        )
+    )
     interval: str
 
     start_at: datetime | None
@@ -143,7 +162,7 @@ class BacktestResultSchema(BaseModel):
 
     exposure_pct: Decimal
     rejected_orders: int
-    final_position: int
+    final_position: Quantity
 
     trades: list[BacktestTradeSchema]
     equity_curve: list[EquityPointSchema]

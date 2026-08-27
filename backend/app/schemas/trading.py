@@ -9,9 +9,23 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.common import Quantity
+
+from app.market_data.instruments import AssetClass
 from app.models.enums import OrderSide, OrderStatus, OrderType
 
 _MONEY = {"max_digits": 18, "decimal_places": 2}
+#: Quantities are Decimal, not int -- crypto trades fractionally. Serialised as
+#: a JSON string like every other Decimal here, so no precision is lost in
+#: transit.
+#:
+#: Deliberately NO ``decimal_places`` bound: how finely an instrument divides
+#: is the instrument's business, and ``normalise_quantity`` answers it knowing
+#: which instrument was asked for. A schema-level cap would reject a
+#: sub-satoshi size with a 422 while a fractional *share* got a 400, splitting
+#: one rule across two error families for no gain. ``max_digits`` stays as a
+#: sanity bound on absurd input.
+_QUANTITY = {"max_digits": 28}
 
 
 class PlaceOrderRequest(BaseModel):
@@ -23,7 +37,16 @@ class PlaceOrderRequest(BaseModel):
     """
 
     side: OrderSide = Field(description="BUY, SELL, SHORT_SELL or BUY_TO_COVER.")
-    quantity: int = Field(gt=0, le=10_000_000, description="Shares. Positive.")
+    quantity: Decimal = Field(
+        gt=0,
+        le=10_000_000,
+        description=(
+            "Positive size. Whole units for a stock; fractional for crypto, "
+            "down to the instrument's quantity_step. Send it as a string "
+            '("0.001") to avoid float rounding.'
+        ),
+        **_QUANTITY,
+    )
     reference_price: Decimal = Field(
         gt=0,
         description="Mid price to trade around; spread and slippage are applied to it.",
@@ -36,7 +59,8 @@ class PlaceOrderRequest(BaseModel):
         **_MONEY,
     )
     symbol: str | None = Field(
-        default=None, description="Optional. Must be the configured symbol if supplied."
+        default=None,
+        description="Any supported instrument. Defaults to the configured default.",
     )
 
 
@@ -46,9 +70,10 @@ class OrderResponse(BaseModel):
     id: int
     symbol: str
     exchange: str
+    asset_class: AssetClass
     side: OrderSide
     order_type: OrderType
-    quantity: int
+    quantity: Quantity
     requested_price: Decimal | None
     execution_price: Decimal | None
     status: OrderStatus
@@ -69,6 +94,10 @@ class ChargesResponse(BaseModel):
     stamp_duty: Decimal
     gst: Decimal
     dp_charges: Decimal
+    tds: Decimal = Field(
+        default=Decimal("0.00"),
+        description="Tax withheld on a crypto disposal. Always zero for a stock.",
+    )
     total_charges: Decimal
 
 
@@ -81,8 +110,9 @@ class TradeResponse(BaseModel):
     order_id: int
     symbol: str
     exchange: str
+    asset_class: AssetClass
     side: OrderSide
-    quantity: int
+    quantity: Quantity
 
     reference_price: Decimal | None = Field(
         default=None, description="The mid price requested."
@@ -103,6 +133,10 @@ class TradeResponse(BaseModel):
     stamp_duty: Decimal
     gst: Decimal
     dp_charges: Decimal
+    tds: Decimal = Field(
+        default=Decimal("0.00"),
+        description="Tax withheld on a crypto disposal. Always zero for a stock.",
+    )
     total_charges: Decimal
 
     gross_pnl: Decimal = Field(
@@ -110,7 +144,7 @@ class TradeResponse(BaseModel):
     )
     net_pnl: Decimal = Field(description="gross_pnl minus this fill's charges.")
 
-    closed_quantity: int
+    closed_quantity: Quantity
     created_at: datetime
 
 
@@ -121,7 +155,8 @@ class PositionResponse(BaseModel):
 
     symbol: str
     exchange: str
-    quantity: int
+    asset_class: AssetClass
+    quantity: Quantity
     average_price: Decimal
     realized_pnl: Decimal = Field(
         description="Cumulative P&L from price movement, before charges."
@@ -158,7 +193,7 @@ class PortfolioResponse(BaseModel):
 
     cash_balance: Decimal
     initial_balance: Decimal
-    quantity: int
+    quantity: Quantity
     average_price: Decimal
     realized_pnl: Decimal = Field(description="Gross, before charges.")
     total_charges: Decimal
@@ -182,7 +217,10 @@ class ExecutionCostPreview(BaseModel):
     """
 
     side: OrderSide
-    quantity: int
+    asset_class: AssetClass = Field(
+        description="Which charge schedule was applied."
+    )
+    quantity: Quantity
     reference_price: Decimal
     bid_price: Decimal
     ask_price: Decimal
@@ -203,7 +241,8 @@ class PositionValuationResponse(BaseModel):
 
     symbol: str
     exchange: str
-    quantity: int = Field(description="Signed: >0 long, 0 flat, <0 short.")
+    asset_class: AssetClass
+    quantity: Quantity = Field(description="Signed: >0 long, 0 flat, <0 short.")
     average_price: Decimal
     mark_price: Decimal | None = Field(
         default=None, description="Price it was valued at. Null when unpriced or flat."
@@ -239,4 +278,11 @@ class PortfolioSummaryResponse(BaseModel):
     positions: list[PositionValuationResponse]
     unpriced_symbols: list[str] = Field(
         description="Open positions no mark price was supplied for."
+    )
+    value_by_asset_class: dict[AssetClass, Decimal] = Field(
+        default_factory=dict,
+        description=(
+            "Position value split by asset class. A breakdown of ONE cash pool, "
+            "not separate balances -- the wallet funds every class."
+        ),
     )

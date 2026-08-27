@@ -27,15 +27,15 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Index,
-    Integer,
     Numeric,
     String,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin
+from app.market_data.instruments import AssetClass
 from app.models.enums import OrderSide
-from app.models.trading import MAX_ORDER_QUANTITY
+from app.models.trading import MAX_ORDER_QUANTITY, QUANTITY
 
 #: Prices and cash amounts, as everywhere else in the schema.
 MONEY = Numeric(18, 2)
@@ -108,6 +108,15 @@ class AutomaticOrder(TimestampMixin, Base):
 
     symbol: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     exchange: Mapped[str] = mapped_column(String(16), nullable=False, default="NSE")
+    #: Which asset class this trigger belongs to. A crypto trigger stays armed
+    #: around the clock; an equity one is only ever reached while its feed is
+    #: being polled.
+    asset_class: Mapped[AssetClass] = mapped_column(
+        Enum(AssetClass, name="asset_class", native_enum=True, validate_strings=True),
+        nullable=False,
+        default=AssetClass.STOCK,
+        index=True,
+    )
 
     order_type: Mapped[AutomaticOrderType] = mapped_column(
         Enum(AutomaticOrderType, name="automatic_order_type", native_enum=True),
@@ -125,7 +134,7 @@ class AutomaticOrder(TimestampMixin, Base):
     action: Mapped[OrderSide] = mapped_column(
         Enum(OrderSide, name="order_side", native_enum=True), nullable=False
     )
-    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)
 
     status: Mapped[AutomaticOrderStatus] = mapped_column(
         Enum(AutomaticOrderStatus, name="automatic_order_status", native_enum=True),

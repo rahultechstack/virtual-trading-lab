@@ -11,6 +11,9 @@ from decimal import ROUND_HALF_UP, Decimal
 CENT = Decimal("0.01")
 #: Derived averages keep two extra digits to limit rounding drift.
 AVERAGE_PRECISION = Decimal("0.0001")
+#: Quantities are exact to eight decimal places -- one satoshi. Stocks use
+#: whole numbers within the same type; the instrument decides which is legal.
+QUANTITY_PRECISION = Decimal("0.00000001")
 
 
 def to_money(value: Decimal) -> Decimal:
@@ -21,6 +24,16 @@ def to_money(value: Decimal) -> Decimal:
 def to_average(value: Decimal) -> Decimal:
     """Round a weighted average price to four decimal places."""
     return value.quantize(AVERAGE_PRECISION, rounding=ROUND_HALF_UP)
+
+
+def to_quantity(value: Decimal) -> Decimal:
+    """Round a quantity to the ledger's eight decimal places.
+
+    Used only where a quantity is *derived* (a weighted split, a clamp), never
+    to coerce a requested size -- ``normalise_quantity`` rejects an off-step
+    request rather than silently rounding it.
+    """
+    return Decimal(value).quantize(QUANTITY_PRECISION, rounding=ROUND_HALF_UP)
 
 
 class PnLCalculator:
@@ -36,7 +49,7 @@ class PnLCalculator:
         *,
         entry_price: Decimal,
         exit_price: Decimal,
-        quantity: int,
+        quantity: Decimal,
         direction: int,
     ) -> Decimal:
         """P&L locked in by closing ``quantity`` units.
@@ -57,7 +70,7 @@ class PnLCalculator:
 
     @staticmethod
     def unrealized_pnl(
-        *, quantity: int, average_price: Decimal, mark_price: Decimal
+        *, quantity: Decimal, average_price: Decimal, mark_price: Decimal
     ) -> Decimal:
         """Open-position P&L if it were closed at ``mark_price``.
 
@@ -69,7 +82,7 @@ class PnLCalculator:
         return to_money((mark_price - average_price) * Decimal(quantity))
 
     @staticmethod
-    def position_value(*, quantity: int, mark_price: Decimal) -> Decimal:
+    def position_value(*, quantity: Decimal, mark_price: Decimal) -> Decimal:
         """Signed market value of the open position.
 
         Negative for a short, which is the liability owed to buy it back.
@@ -79,9 +92,9 @@ class PnLCalculator:
     @staticmethod
     def weighted_average_price(
         *,
-        existing_quantity: int,
+        existing_quantity: Decimal,
         existing_average: Decimal,
-        added_quantity: int,
+        added_quantity: Decimal,
         added_price: Decimal,
     ) -> Decimal:
         """Blend a new fill into an existing average entry price.

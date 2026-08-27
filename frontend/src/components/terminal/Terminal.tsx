@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { AutomaticOrderPanel } from './AutomaticOrderPanel';
+import { MarketStatusBadge } from './MarketStatusBadge';
 import { StockSelector } from './StockSelector';
 import { OrdersPanel } from './OrdersPanel';
 import { PositionPanel } from './PositionPanel';
@@ -9,12 +10,35 @@ import { TerminalHeader } from './TerminalHeader';
 import { TradeHistory } from './TradeHistory';
 import { TradingPanel } from './TradingPanel';
 import { WalletPanel } from './WalletPanel';
+import { fetchInstrument } from '@/api/instruments';
 import { DEFAULT_EXCHANGE, DEFAULT_SYMBOL } from '@/config/instrument';
 import type { Instrument } from '@/types/instruments';
 import { useAccount } from '@/hooks/useAccount';
 import { useLivePrice } from '@/hooks/useLivePrice';
 
 type Tab = 'orders' | 'trades';
+
+/**
+ * A provisional instrument for the very first render.
+ *
+ * The real record — asset class, step size, trading hours — is fetched from
+ * `GET /instruments/{symbol}` immediately. Guessing STOCK here is safe because
+ * the default instrument is configured server-side and is an equity; every
+ * field that matters is replaced before the user can act on it.
+ */
+const PROVISIONAL: Instrument = {
+  symbol: DEFAULT_SYMBOL,
+  company_name: '',
+  asset_class: 'STOCK',
+  exchange: DEFAULT_EXCHANGE,
+  market: '',
+  trading_hours: '',
+  instrument_type: 'EQUITY',
+  quantity_step: '1',
+  is_fractional: false,
+  quantity_precision: 0,
+  data_available: null,
+};
 
 /**
  * The trading terminal.
@@ -24,22 +48,46 @@ type Tab = 'orders' | 'trades';
  * * **WebSocket** carries the live price -- one stream, no polling.
  * * **REST** carries commands and account state, refetched after an order
  *   fills so every panel updates from one consistent set of reads.
+ *
+ * The selected instrument drives everything downstream: which feed prices it,
+ * what sizes are legal, which charges apply and when its market is open. None
+ * of that is decided here -- it comes from the backend on the instrument
+ * record and the market-status endpoint.
  */
 export function Terminal() {
   // The instrument being viewed and traded. Switching it does NOT reload the
   // app: every panel refetches for the new symbol, and the WebSocket
   // re-subscribes on the same connection.
-  const [instrument, setInstrument] = useState<Instrument | null>({
-    symbol: DEFAULT_SYMBOL,
-    company_name: '',
-    exchange: DEFAULT_EXCHANGE,
-    instrument_type: 'EQUITY',
-    data_available: null,
-  });
-  const symbol = instrument?.symbol ?? DEFAULT_SYMBOL;
+  const [instrument, setInstrument] = useState<Instrument>(PROVISIONAL);
+  const symbol = instrument.symbol;
 
-  const { tick, automaticOrderEvent, status, connection, attempt, isStale, reconnect } =
-    useLivePrice(symbol);
+  // Replace the provisional record with the real one, and confirm the feed can
+  // actually serve it. Runs on first load and after any switch that handed us
+  // a record from the picker (harmless: the response is authoritative either
+  // way, and the probe is cached server-side).
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchInstrument(symbol, controller.signal)
+      .then((full) => setInstrument((current) =>
+        current.symbol === full.symbol ? full : current,
+      ))
+      .catch(() => {
+        // A failed lookup leaves the current record in place; the panels
+        // surface their own errors rather than blanking the terminal.
+      });
+    return () => controller.abort();
+  }, [symbol]);
+
+  const {
+    tick,
+    subscription,
+    automaticOrderEvent,
+    status,
+    connection,
+    attempt,
+    isStale,
+    reconnect,
+  } = useLivePrice(symbol);
   const markPrice = tick?.last_price ?? null;
 
   const {
@@ -80,6 +128,7 @@ export function Terminal() {
     <div className="terminal">
       <div className="terminal__instrument">
         <StockSelector selected={instrument} onSelect={setInstrument} />
+        <MarketStatusBadge symbol={symbol} subscription={subscription} />
       </div>
 
       <TerminalHeader
@@ -111,7 +160,7 @@ export function Terminal() {
         <div className="terminal__main">
           <PriceChart
             symbol={symbol}
-            exchange={instrument?.exchange ?? DEFAULT_EXCHANGE}
+            exchange={instrument.exchange}
             tick={tick}
           />
 
@@ -164,7 +213,7 @@ export function Terminal() {
 
         <aside className="terminal__side">
           <TradingPanel
-            symbol={symbol}
+            instrument={instrument}
             referencePrice={markPrice}
             position={position}
             disabled={needsWallet}
@@ -172,7 +221,7 @@ export function Terminal() {
           />
 
           <AutomaticOrderPanel
-            symbol={symbol}
+            instrument={instrument}
             position={position}
             referencePrice={markPrice}
             disabled={needsWallet}

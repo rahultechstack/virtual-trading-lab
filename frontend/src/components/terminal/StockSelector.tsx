@@ -1,23 +1,46 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { fetchInstruments } from '@/api/instruments';
-import type { Instrument } from '@/types/instruments';
+import {
+  ASSET_CLASS_LABELS,
+  type AssetClass,
+  type AssetFilter,
+  type Instrument,
+} from '@/types/instruments';
 
 interface Props {
   selected: Instrument | null;
   onSelect: (instrument: Instrument) => void;
 }
 
+const FILTERS: ReadonlyArray<{ value: AssetFilter; label: string }> = [
+  { value: null, label: 'All' },
+  { value: 'STOCK', label: 'Stocks' },
+  { value: 'CRYPTO', label: 'Crypto' },
+];
+
+/** Order asset classes appear in when nothing is filtered. */
+const GROUP_ORDER: AssetClass[] = ['STOCK', 'CRYPTO'];
+
+const GROUP_HEADINGS: Record<AssetClass, string> = {
+  STOCK: 'Stocks',
+  CRYPTO: 'Cryptocurrency',
+};
+
 /**
- * Stock picker: search by company name or NSE symbol, pick from the list.
+ * Instrument picker: filter by asset class, search by name or symbol.
  *
  * The universe comes from `GET /instruments` — the backend is the source of
- * truth for what is tradable, and this component never keeps its own list.
- * Selecting does not reload the app; the parent swaps the symbol and every
+ * truth for what is tradable, and this component never keeps its own list of
+ * stocks or coins. The asset filter is applied *server-side* for the same
+ * reason: the client should not have to know which symbols are coins.
+ *
+ * Selecting does not reload the app; the parent swaps the instrument and every
  * panel refetches.
  */
 export function StockSelector({ selected, onSelect }: Props) {
   const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<AssetFilter>(null);
   const [results, setResults] = useState<Instrument[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -32,7 +55,7 @@ export function StockSelector({ selected, onSelect }: Props) {
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       setLoading(true);
-      fetchInstruments(query, 50, controller.signal)
+      fetchInstruments(query, filter, 100, controller.signal)
         .then((rows) => {
           setResults(rows);
           setHighlight(0);
@@ -40,7 +63,9 @@ export function StockSelector({ selected, onSelect }: Props) {
         })
         .catch((err: unknown) => {
           if (controller.signal.aborted) return;
-          setError(err instanceof Error ? err.message : 'Could not load stocks.');
+          setError(
+            err instanceof Error ? err.message : 'Could not load instruments.',
+          );
         })
         .finally(() => setLoading(false));
     }, 180);
@@ -49,7 +74,7 @@ export function StockSelector({ selected, onSelect }: Props) {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [query, open]);
+  }, [query, filter, open]);
 
   // Close when clicking elsewhere.
   useEffect(() => {
@@ -87,9 +112,36 @@ export function StockSelector({ selected, onSelect }: Props) {
   };
 
   const label = useMemo(
-    () => (selected ? `${selected.symbol} · ${selected.company_name}` : 'Select stock'),
+    () =>
+      selected
+        ? `${selected.symbol} · ${selected.company_name}`
+        : 'Select instrument',
     [selected],
   );
+
+  /**
+   * Group by asset class, preserving the backend's ranking inside each group.
+   * Headings appear only when more than one class is present, so a filtered
+   * list is not cluttered with a single redundant header.
+   */
+  const groups = useMemo(() => {
+    const byClass = new Map<AssetClass, Instrument[]>();
+    for (const instrument of results) {
+      const bucket = byClass.get(instrument.asset_class) ?? [];
+      bucket.push(instrument);
+      byClass.set(instrument.asset_class, bucket);
+    }
+    return GROUP_ORDER.filter((assetClass) => byClass.has(assetClass)).map(
+      (assetClass) => ({
+        assetClass,
+        instruments: byClass.get(assetClass) ?? [],
+      }),
+    );
+  }, [results]);
+
+  const showHeadings = groups.length > 1;
+  // Flat index across groups, so keyboard highlight matches what is rendered.
+  let renderIndex = -1;
 
   return (
     <div className="stock-selector" ref={rootRef}>
@@ -101,11 +153,18 @@ export function StockSelector({ selected, onSelect }: Props) {
         aria-expanded={open}
       >
         <span className="stock-selector__symbol">
-          {selected?.symbol ?? 'Select stock'}
+          {selected?.symbol ?? 'Select instrument'}
         </span>
         <span className="stock-selector__name muted">
-          {selected?.company_name ?? 'Search company or symbol'}
+          {selected?.company_name ?? 'Search name or symbol'}
         </span>
+        {selected && (
+          <span
+            className={`asset-tag asset-tag--${selected.asset_class.toLowerCase()}`}
+          >
+            {ASSET_CLASS_LABELS[selected.asset_class]}
+          </span>
+        )}
         <span className="stock-selector__exchange muted">
           {selected?.exchange ?? 'NSE'}
         </span>
@@ -118,47 +177,84 @@ export function StockSelector({ selected, onSelect }: Props) {
             className="field__input stock-selector__search"
             type="search"
             autoFocus
-            placeholder="Search company or symbol…"
+            placeholder="Search name or symbol…"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={onKeyDown}
-            aria-label="Search stocks"
+            aria-label="Search instruments"
           />
+
+          <div className="stock-selector__filters" role="tablist">
+            {FILTERS.map(({ value, label: filterLabel }) => (
+              <button
+                key={filterLabel}
+                type="button"
+                role="tab"
+                aria-selected={filter === value}
+                className={`chip ${filter === value ? 'chip--active' : ''}`}
+                onClick={() => setFilter(value)}
+              >
+                {filterLabel}
+              </button>
+            ))}
+          </div>
 
           {error ? (
             <p className="form-note negative">{error}</p>
           ) : loading && results.length === 0 ? (
             <p className="muted stock-selector__empty">Searching…</p>
           ) : results.length === 0 ? (
-            <p className="muted stock-selector__empty">No matching stock.</p>
+            <p className="muted stock-selector__empty">
+              No matching instrument.
+            </p>
           ) : (
             <ul className="stock-selector__list" role="listbox" aria-label={label}>
-              {results.map((instrument, index) => (
-                <li key={instrument.symbol}>
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={instrument.symbol === selected?.symbol}
-                    className={`stock-selector__option ${
-                      index === highlight ? 'stock-selector__option--active' : ''
-                    } ${
-                      instrument.symbol === selected?.symbol
-                        ? 'stock-selector__option--selected'
-                        : ''
-                    }`}
-                    onMouseEnter={() => setHighlight(index)}
-                    onClick={() => choose(instrument)}
-                  >
-                    <span className="stock-selector__option-symbol">
-                      {instrument.symbol}
-                    </span>
-                    <span className="stock-selector__option-name muted">
-                      {instrument.company_name}
-                    </span>
-                    <span className="stock-selector__option-exchange muted">
-                      {instrument.exchange}
-                    </span>
-                  </button>
+              {groups.map(({ assetClass, instruments }) => (
+                <li key={assetClass} className="stock-selector__group">
+                  {showHeadings && (
+                    <p className="stock-selector__group-heading muted">
+                      {GROUP_HEADINGS[assetClass]}
+                    </p>
+                  )}
+                  <ul className="stock-selector__group-list">
+                    {instruments.map((instrument) => {
+                      renderIndex += 1;
+                      const index = renderIndex;
+                      return (
+                        <li key={instrument.symbol}>
+                          <button
+                            type="button"
+                            role="option"
+                            aria-selected={instrument.symbol === selected?.symbol}
+                            className={`stock-selector__option ${
+                              index === highlight
+                                ? 'stock-selector__option--active'
+                                : ''
+                            } ${
+                              instrument.symbol === selected?.symbol
+                                ? 'stock-selector__option--selected'
+                                : ''
+                            }`}
+                            onMouseEnter={() => setHighlight(index)}
+                            onClick={() => choose(instrument)}
+                          >
+                            <span className="stock-selector__option-symbol">
+                              {instrument.symbol}
+                            </span>
+                            <span className="stock-selector__option-name muted">
+                              {instrument.company_name}
+                            </span>
+                            <span
+                              className="stock-selector__option-exchange muted"
+                              title={instrument.trading_hours}
+                            >
+                              {instrument.exchange}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
                 </li>
               ))}
             </ul>

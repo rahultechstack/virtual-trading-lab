@@ -12,7 +12,11 @@ from fastapi import APIRouter, Query, status
 from app.api.deps import DbSession
 from app.core.exceptions import InvalidOrderError
 from app.models.enums import OrderSide, OrderStatus
-from app.market_data.instruments import resolve_symbol
+from app.market_data.instruments import (
+    normalise_quantity,
+    resolve_instrument,
+    resolve_symbol,
+)
 from app.schemas.trading import (
     ChargesResponse,
     ExecutionCostPreview,
@@ -192,6 +196,7 @@ async def get_portfolio_summary(
             PositionValuationResponse.model_validate(position)
             for position in valuation.positions
         ],
+        value_by_asset_class=valuation.value_by_asset_class(),
     )
 
 
@@ -231,20 +236,38 @@ async def get_portfolio(
 async def preview_execution_cost(
     session: DbSession,
     side: Annotated[OrderSide, Query(description="Side to price.")],
-    quantity: Annotated[int, Query(ge=1, le=10_000_000)],
+    quantity: Annotated[Decimal, Query(gt=0, le=10_000_000)],
     reference_price: Annotated[Decimal, Query(gt=0, description="Mid price.")],
+    symbol: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Instrument to price for. Its asset class decides which charge "
+                "schedule applies. Defaults to the configured default."
+            )
+        ),
+    ] = None,
 ) -> ExecutionCostPreview:
     """Price a hypothetical order.
 
     Runs the same spread, slippage and fee models the engine uses, but writes
-    nothing -- useful for seeing what an order would actually cost.
+    nothing -- useful for seeing what an order would actually cost. Pricing a
+    crypto symbol returns the crypto schedule (exchange fee, GST, TDS), not
+    NSE's statutory charges.
     """
+    instrument = resolve_instrument(symbol)
+    quantity = normalise_quantity(instrument, quantity)
+
     fill = ExecutionEngine(session).price_fill(
-        side=side, quantity=quantity, reference_price=reference_price
+        side=side,
+        quantity=quantity,
+        reference_price=reference_price,
+        asset_class=instrument.asset_class,
     )
 
     return ExecutionCostPreview(
         side=side,
+        asset_class=instrument.asset_class,
         quantity=quantity,
         reference_price=reference_price,
         bid_price=fill.quote.bid,
@@ -261,6 +284,7 @@ async def preview_execution_cost(
             stamp_duty=fill.charges.stamp_duty,
             gst=fill.charges.gst,
             dp_charges=fill.charges.dp_charges,
+            tds=fill.charges.tds,
             total_charges=fill.charges.total,
         ),
         total_execution_cost=fill.execution_cost,

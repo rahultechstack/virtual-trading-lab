@@ -15,11 +15,13 @@ export interface AutomaticOrder {
   id: number;
   symbol: string;
   exchange: string;
+  asset_class: import('./instruments').AssetClass;
   order_type: AutomaticOrderType;
   trigger_price: string;
   trigger_condition: TriggerCondition;
   action: import('./trading').OrderSide;
-  quantity: number;
+  /** Decimal string — fractional for crypto. */
+  quantity: string;
   status: AutomaticOrderStatus;
   created_at: string;
   triggered_at: string | null;
@@ -34,7 +36,8 @@ export interface CreateAutomaticOrderRequest {
   trigger_price: string;
   trigger_condition: TriggerCondition;
   action: import('./trading').OrderSide;
-  quantity: number;
+  /** Decimal string, e.g. "100" or "0.001". Never a float. */
+  quantity: string;
   /** Optional; lets the backend reject a stop that would fire immediately. */
   reference_price?: string | null;
   /** Instrument. Defaults to the backend's configured default. */

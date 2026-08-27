@@ -5,6 +5,8 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.common import Quantity
+
 from app.models.portfolio_snapshot import SnapshotSource
 
 
@@ -18,7 +20,7 @@ class SnapshotResponse(BaseModel):
     source: SnapshotSource
     symbol: str
 
-    quantity: int
+    quantity: Quantity
     average_price: Decimal
     mark_price: Decimal | None = Field(
         default=None, description="Price the position was valued at. Null when flat."
@@ -50,7 +52,7 @@ class TradeExtremeResponse(BaseModel):
 
     trade_id: int
     side: str
-    quantity: int
+    quantity: Quantity
     execution_price: Decimal
     gross_pnl: Decimal
     total_charges: Decimal

@@ -23,6 +23,13 @@ every tick forever.
 
 An in-process ``asyncio.Lock`` additionally stops two overlapping evaluations
 when execution takes longer than the poll interval.
+
+**Around-the-clock triggers.** The monitor caches the *set of symbols* that
+have an ACTIVE order, not merely how many there are. The price stream reads
+that set and keeps polling those instruments even when no browser is connected,
+so a crypto stop-loss can fire at 3am on a Sunday -- which is the whole point of
+a market that never closes. With nothing armed and nobody watching, the set is
+empty and no upstream call is made at all.
 """
 
 import asyncio
@@ -30,7 +37,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.automation.evaluator import condition_is_met
@@ -42,8 +49,8 @@ from app.models.automatic_order import AutomaticOrder, AutomaticOrderStatus
 
 logger = get_logger(__name__)
 
-#: Re-count ACTIVE orders at least this often, even while the cached count says
-#: there are none. Guards against a row inserted outside this process (psql, a
+#: Re-read the ACTIVE set at least this often, even while the cache says there
+#: is nothing armed. Guards against a row inserted outside this process (psql, a
 #: second worker) never being noticed.
 REVALIDATE_EVERY_EVALUATIONS = 20
 
@@ -54,10 +61,10 @@ class AutomaticOrderMonitor:
     def __init__(self, session_factory: async_sessionmaker | None = None) -> None:
         self._session_factory = session_factory or SessionLocal
         self._lock = asyncio.Lock()
-        #: How many ACTIVE orders exist, or None when that is unknown. With
-        #: none, a tick costs nothing at all -- no session, no query. Without
-        #: this the monitor opened a database connection on every single tick.
-        self._active_count: int | None = None
+        #: Which symbols have an ACTIVE order, or None when that is unknown.
+        #: Empty means a tick costs nothing at all -- no session, no query.
+        #: Without this the monitor opened a database connection on every tick.
+        self._active_symbols: frozenset[str] | None = None
         self._since_revalidate = 0
         #: Counters surfaced by the stream status endpoint.
         self.evaluations = 0
@@ -65,12 +72,36 @@ class AutomaticOrderMonitor:
         self.failed = 0
 
     def invalidate(self) -> None:
-        """Forget the cached ACTIVE count.
+        """Forget the cached ACTIVE set.
 
         Called when an automatic order is created or cancelled, so the very
         next tick re-reads instead of waiting for the periodic revalidation.
         """
-        self._active_count = None
+        self._active_symbols = None
+
+    def armed_symbols(self) -> frozenset[str]:
+        """Symbols known to have an ACTIVE order, from the cache alone.
+
+        Read by the price stream to decide what to keep polling with no client
+        connected. Deliberately does NOT hit the database: it is called on
+        every poll cycle, and the set is refreshed by the evaluation path.
+        """
+        return self._active_symbols or frozenset()
+
+    async def refresh_armed_symbols(self) -> frozenset[str]:
+        """Re-read the ACTIVE set from the database and cache it."""
+        async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(AutomaticOrder.symbol)
+                    .where(AutomaticOrder.status == AutomaticOrderStatus.ACTIVE)
+                    .distinct()
+                )
+            ).scalars()
+            symbols = frozenset(symbol.upper() for symbol in rows)
+        self._active_symbols = symbols
+        self._since_revalidate = 0
+        return symbols
 
     async def on_price(
         self, *, market_price: Decimal, symbol: str | None = None
@@ -107,21 +138,12 @@ class AutomaticOrderMonitor:
         """
         self._since_revalidate += 1
         stale = (
-            self._active_count is None
+            self._active_symbols is None
             or self._since_revalidate >= REVALIDATE_EVERY_EVALUATIONS
         )
         if stale:
-            async with self._session_factory() as session:
-                count = (
-                    await session.execute(
-                        select(func.count(AutomaticOrder.id)).where(
-                            AutomaticOrder.status == AutomaticOrderStatus.ACTIVE
-                        )
-                    )
-                ).scalar_one()
-            self._active_count = int(count)
-            self._since_revalidate = 0
-        return (self._active_count or 0) > 0
+            await self.refresh_armed_symbols()
+        return bool(self._active_symbols)
 
     async def _evaluate(
         self, *, market_price: Decimal, symbol: str
@@ -285,7 +307,10 @@ class AutomaticOrderMonitor:
             "evaluations": self.evaluations,
             "triggered": self.triggered,
             "failed": self.failed,
-            "active_cached": self._active_count,
+            "active_cached": (
+                None if self._active_symbols is None else len(self._active_symbols)
+            ),
+            "armed_symbols": sorted(self._active_symbols or ()),
         }
 
 

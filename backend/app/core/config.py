@@ -64,10 +64,58 @@ class Settings(BaseSettings):
     TRADING_SYMBOL: str = "RELIANCE"
     TRADING_EXCHANGE: str = "NSE"
 
+    # --- Market hours ------------------------------------------------------
+    # Whether the trading engine REFUSES an order while the instrument's
+    # market is closed. Off by default: this is a paper-trading lab and being
+    # able to place a practice order at 9pm is the point. Turn it on to
+    # simulate a real broker.
+    #
+    # Crypto is unaffected either way -- its calendar is open 24/7, so the
+    # check passes at any hour, on any day, including NSE holidays.
+    ENFORCE_MARKET_HOURS: bool = False
+
+    # NSE cash-market session, in NSE_TIMEZONE. Pre-open (09:00-09:15) is a
+    # call auction and is NOT continuous trading, so it is reported as
+    # PRE_OPEN rather than OPEN.
+    NSE_TIMEZONE: str = "Asia/Kolkata"
+    NSE_PRE_OPEN_TIME: str = "09:00"
+    NSE_OPEN_TIME: str = "09:15"
+    NSE_CLOSE_TIME: str = "15:30"
+
+    # Full-day NSE trading holidays as ISO dates, comma separated.
+    #
+    # ONLY fixed-date national holidays are shipped as defaults. India's
+    # exchange holiday list is published annually by NSE and most of it moves
+    # year to year (Diwali, Holi, Eid, Muhurat trading and others follow lunar
+    # calendars). Those CANNOT be derived and are deliberately not guessed at
+    # here -- set this from the official NSE circular each year. See
+    # ARCHITECTURE.md 20.4.
+    NSE_HOLIDAYS: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: [
+            "2026-01-26",  # Republic Day
+            "2026-05-01",  # Maharashtra Day
+            "2026-08-15",  # Independence Day
+            "2026-10-02",  # Gandhi Jayanti
+            "2026-12-25",  # Christmas
+        ]
+    )
+
     # --- Market data -----------------------------------------------------
-    # Which provider implementation to load. See app/market_data/registry.py.
+    # Providers are chosen PER ASSET CLASS, because a feed that serves NSE
+    # equities is not automatically a feed that serves crypto. See
+    # app/market_data/router.py.
+    #
+    # MARKET_DATA_PROVIDER is the equity feed and remains the name every
+    # existing deployment sets.
     MARKET_DATA_PROVIDER: str = "yahoo"
+    # The crypto feed. Verified to serve BTC-INR/ETH-INR with 1m-1mo OHLCV.
+    CRYPTO_MARKET_DATA_PROVIDER: str = "yahoo_crypto"
     MARKET_DATA_TIMEOUT_SECONDS: float = 15.0
+
+    # Quote currency for crypto pairs. The provider is asked for
+    # <SYMBOL>-<CRYPTO_QUOTE_CURRENCY>, so INR keeps one currency across the
+    # whole portfolio and no FX conversion is ever needed.
+    CRYPTO_QUOTE_CURRENCY: str = "INR"
 
     # Credentials for providers that need them. SecretStr keeps the value out
     # of logs, tracebacks and repr output. NEVER hard-code a key here - set it
@@ -88,6 +136,12 @@ class Settings(BaseSettings):
     # --- Real-time streaming ----------------------------------------------
     STREAM_POLL_INTERVAL_SECONDS: float = 5.0
     STREAM_MAX_CONNECTIONS: int = 50
+    # Keep polling an instrument that has an ACTIVE automatic order even when
+    # no browser is connected. Without this a stop-loss only fires while a tab
+    # is open, which defeats the purpose of a 24/7 market: a crypto stop set on
+    # Friday would sit inert all weekend. With nothing armed and nobody
+    # watching, nothing is polled either way.
+    STREAM_POLL_FOR_AUTOMATION: bool = True
     # Derive bid/ask from the spread model when the provider has no depth.
     # Ticks label these as "modelled" so they are never mistaken for real.
     STREAM_MODEL_BID_ASK: bool = True
@@ -136,11 +190,45 @@ class Settings(BaseSettings):
     GST_PERCENT: Decimal = Decimal("18")
     DP_CHARGES_PER_SELL: Decimal = Decimal("0")
 
+    # --- Crypto charges ----------------------------------------------------
+    # SIMULATED. No crypto exchange has been integrated, so these are
+    # deliberately CONFIGURABLE ASSUMPTIONS rather than any real venue's
+    # published schedule. Change them to match whichever exchange you want to
+    # model. Documented in ARCHITECTURE.md 20.7.
+    #
+    # NSE charges (STT, stamp duty, SEBI turnover fee, DP charges) are
+    # statutory to the securities market and are NEVER applied to crypto.
+    #
+    # A flat taker fee on turnover, both sides. 0.10% is a common order of
+    # magnitude for a retail spot taker; it is an assumption, not a quote.
+    CRYPTO_FEE_PERCENT: Decimal = Decimal("0.10")
+    CRYPTO_FEE_MAX_PER_ORDER: Decimal | None = None
+    # GST on the exchange's service fee, mirroring the equity treatment.
+    CRYPTO_GST_PERCENT: Decimal = Decimal("18")
+    # TDS on the transfer of a Virtual Digital Asset, withheld on the SELL
+    # side. Unlike the fee above this one is statutory (India, s.194S), which
+    # is why it is modelled rather than folded into the fee. Set to 0 to
+    # disable it entirely.
+    CRYPTO_TDS_PERCENT: Decimal = Decimal("1")
+
     # --- Wallet ----------------------------------------------------------
     # Opening capital granted when the wallet is first initialised.
     # Decimal (never float) because this is money.
     WALLET_INITIAL_BALANCE: Decimal = Decimal("1000000.00")
     WALLET_CURRENCY: str = "INR"
+
+    @field_validator("NSE_HOLIDAYS", mode="before")
+    @classmethod
+    def _parse_holidays(cls, value: object) -> object:
+        """Accept ``2026-01-26,2026-08-15`` from .env, a JSON array, or a list."""
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        if not text:
+            return []
+        if text.startswith("["):
+            return json.loads(text)
+        return [entry.strip() for entry in text.split(",") if entry.strip()]
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

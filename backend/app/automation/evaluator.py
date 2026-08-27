@@ -33,7 +33,7 @@ def condition_is_met(
     return market_price <= trigger_price
 
 
-def closing_side_for(position_quantity: int) -> OrderSide | None:
+def closing_side_for(position_quantity: Decimal) -> OrderSide | None:
     """The side that reduces a position, or ``None`` when flat.
 
     A long is closed by SELL, a short by BUY_TO_COVER -- the two closing-only
@@ -46,7 +46,7 @@ def closing_side_for(position_quantity: int) -> OrderSide | None:
     return None
 
 
-def stop_loss_condition_for(position_quantity: int) -> TriggerCondition | None:
+def stop_loss_condition_for(position_quantity: Decimal) -> TriggerCondition | None:
     """The only condition that makes sense as a stop on this position.
 
     A long is stopped out on the way **down** (LTE); a short on the way **up**
@@ -60,7 +60,7 @@ def stop_loss_condition_for(position_quantity: int) -> TriggerCondition | None:
     return None
 
 
-def protects_position(action: OrderSide, position_quantity: int) -> bool:
+def protects_position(action: OrderSide, position_quantity: Decimal) -> bool:
     """Whether ``action`` still reduces the position it was created against.
 
     Used to retire a stop-loss whose position has gone flat or reversed --

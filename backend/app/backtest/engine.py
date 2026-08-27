@@ -19,6 +19,21 @@ point.
 
 **No lookahead.** The strategy sees history only up to the current bar; see
 ``StrategyContext``.
+
+**Asset classes.** The engine iterates the bars it is given and asserts nothing
+about when they occur -- there is no weekday filter, no session-hours check and
+no 252-day annualisation anywhere in it. A 24/7 crypto series with Saturday and
+Sunday bars therefore runs correctly with no special case, and so does an NSE
+series with none. Two things do come from the instrument:
+
+* **Sizing.** ``PositionSizer`` rounds down to the instrument's
+  ``quantity_step``. Without this a percent-of-equity run on BTC would size
+  ``int(950000 / 7600000)`` = **0** and never trade at all.
+* **Charges.** Fills are priced with the fee schedule for the instrument's
+  asset class, so a crypto backtest is not charged STT.
+
+The instrument's calendar is recorded on the result (``trading_calendar``) so a
+reader can tell a 24/7 run from a session-bound one.
 """
 
 from dataclasses import dataclass
@@ -30,6 +45,12 @@ from app.backtest.results import BacktestResult, summarise
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.indicators.service import IndicatorService
+from app.market_data.instruments import (
+    AssetClass,
+    Instrument,
+    resolve_instrument,
+)
+from app.markets.registry import calendar_for
 from app.models.enums import OrderSide
 from app.schemas.market_data import Candle
 from app.strategies.base import Decision, Signal, Strategy, StrategyContext
@@ -71,7 +92,7 @@ class BacktestConfig:
     sizing_mode: SizingMode = SizingMode.PERCENT_OF_EQUITY
     #: Used by PERCENT_OF_EQUITY. Below 100 to leave room for charges.
     equity_percent: Decimal = Decimal("95")
-    fixed_quantity: int = 100
+    fixed_quantity: Decimal = Decimal("100")
     fixed_value: Decimal = Decimal("100000.00")
 
     #: Close any open position on the final bar, so the result is not
@@ -80,26 +101,48 @@ class BacktestConfig:
 
 
 class PositionSizer:
-    """Decides how many shares an order is for."""
+    """Decides how large an order is, in the instrument's own units.
 
-    def __init__(self, config: BacktestConfig) -> None:
+    Sizes are rounded **down** to the instrument's tradable increment, so a
+    stock gets whole shares and crypto gets a legal fraction. Rounding down
+    rather than to nearest matters: rounding up could exceed the budget the
+    caller set.
+    """
+
+    def __init__(
+        self, config: BacktestConfig, instrument: Instrument | None = None
+    ) -> None:
         self._config = config
+        # Defaults to the configured default instrument, matching the engine's
+        # own fallback, so a sizer can still be built from a config alone.
+        self._instrument = instrument or resolve_instrument(None)
 
-    def target_size(self, *, equity: Decimal, price: Decimal) -> int:
-        """How large a fresh position should be, in shares."""
+    def target_size(self, *, equity: Decimal, price: Decimal) -> Decimal:
+        """How large a fresh position should be, in the instrument's units."""
+        zero = Decimal("0")
         if price <= 0:
-            return 0
+            return zero
 
         config = self._config
         if config.sizing_mode is SizingMode.FIXED_QUANTITY:
-            return max(config.fixed_quantity, 0)
+            return max(self._to_step(config.fixed_quantity), zero)
 
         if config.sizing_mode is SizingMode.FIXED_VALUE:
             budget = config.fixed_value
         else:
             budget = equity * config.equity_percent / Decimal("100")
 
-        return max(int(budget / price), 0)
+        return max(self._to_step(budget / price), zero)
+
+    def _to_step(self, size: Decimal) -> Decimal:
+        """Round DOWN to a whole multiple of the instrument's increment.
+
+        For an equity (step 1) this is the old ``int(...)`` truncation exactly.
+        For BTC (step 0.00000001) it keeps eight decimals, so a percent-of-
+        equity run sizes a real fraction instead of truncating to zero.
+        """
+        step = self._instrument.quantity_step
+        return (Decimal(size) // step) * step
 
 
 class BacktestEngine:
@@ -125,7 +168,9 @@ class BacktestEngine:
             fees=fees,
         )
         self._indicators = indicator_service or IndicatorService()
-        self._sizer = PositionSizer(self.config)
+        #: Both rebuilt per run, once the instrument is known.
+        self._sizer: PositionSizer | None = None
+        self._asset_class = AssetClass.STOCK
 
     # -- public API ------------------------------------------------------
 
@@ -142,13 +187,21 @@ class BacktestEngine:
         # Fall back to the configured instrument rather than a hard-coded
         # ticker, so a backtest driven directly (not via the API) still
         # labels itself correctly after the platform is repointed.
-        symbol = symbol or settings.TRADING_SYMBOL
-        exchange = exchange or settings.TRADING_EXCHANGE
+        instrument = resolve_instrument(symbol or settings.TRADING_SYMBOL)
+        symbol = instrument.symbol
+        exchange = exchange or instrument.exchange
+        # Sizing and charges both follow the instrument, so a BTC run sizes
+        # fractionally and is charged the crypto schedule.
+        self._sizer = PositionSizer(self.config, instrument)
+        self._asset_class = instrument.asset_class
+
         strategy.reset()
         portfolio = BacktestPortfolio(initial_cash=self.config.initial_capital)
 
         if not candles:
-            return self._summarise(strategy, portfolio, symbol, exchange, interval)
+            return self._summarise(
+                strategy, portfolio, instrument, exchange, interval
+            )
 
         indicators = self._precompute(strategy, candles, interval)
         warmup = strategy.warmup_bars()
@@ -183,7 +236,7 @@ class BacktestEngine:
         if self.config.close_at_end:
             self._close_out(candles, portfolio)
 
-        return self._summarise(strategy, portfolio, symbol, exchange, interval)
+        return self._summarise(strategy, portfolio, instrument, exchange, interval)
 
     # -- internals -------------------------------------------------------
 
@@ -246,27 +299,28 @@ class BacktestEngine:
 
     def _order_quantity(
         self, signal: Signal, portfolio: BacktestPortfolio, price: Decimal
-    ) -> int:
+    ) -> Decimal:
         """Shares needed to move from the current position to the target one.
 
         ``BUY`` from a short and ``SHORT`` from a long cross zero in a single
         order, exactly as the live engine allows, so the quantity covers the
         existing exposure *plus* the new position.
         """
-        current = portfolio.quantity
+        current = Decimal(portfolio.quantity)
+        zero = Decimal("0")
         target = self._sizer.target_size(
             equity=portfolio.equity(price), price=price
         )
 
         if signal is Signal.BUY:
-            return max(target - current, 0)
+            return max(target - current, zero)
         if signal is Signal.SHORT:
-            return max(target + current, 0)
+            return max(target + current, zero)
         if signal is Signal.SELL:
-            return max(current, 0)
+            return max(current, zero)
         if signal is Signal.COVER:
-            return max(-current, 0)
-        return 0
+            return max(-current, zero)
+        return zero
 
     def _execute(
         self,
@@ -281,8 +335,10 @@ class BacktestEngine:
             return
 
         reference_price = self._reference_price(index, candles)
-        quantity = decision.quantity or self._order_quantity(
-            decision.signal, portfolio, reference_price
+        quantity = Decimal(
+            decision.quantity
+            if decision.quantity is not None
+            else self._order_quantity(decision.signal, portfolio, reference_price)
         )
         if quantity <= 0:
             return
@@ -334,7 +390,7 @@ class BacktestEngine:
         self,
         *,
         side: OrderSide,
-        quantity: int,
+        quantity: Decimal,
         reference_price: Decimal,
         index: int,
         candle: Candle,
@@ -342,7 +398,10 @@ class BacktestEngine:
         reason: str,
     ) -> None:
         fill = self._execution.price_fill(
-            side=side, quantity=quantity, reference_price=reference_price
+            side=side,
+            quantity=quantity,
+            reference_price=reference_price,
+            asset_class=self._asset_class,
         )
         try:
             portfolio.apply(
@@ -357,14 +416,19 @@ class BacktestEngine:
         self,
         strategy: Strategy,
         portfolio: BacktestPortfolio,
-        symbol: str,
+        instrument: Instrument,
         exchange: str,
         interval: str,
     ) -> BacktestResult:
         return summarise(
             strategy=strategy.name,
-            symbol=symbol,
+            symbol=instrument.symbol,
             exchange=exchange,
+            asset_class=instrument.asset_class.value,
+            # Recorded, not enforced: the run is driven by the bars supplied.
+            # A crypto result says "crypto", so nobody reads a Saturday bar as
+            # an error.
+            trading_calendar=calendar_for(instrument).name,
             interval=interval,
             initial_capital=self.config.initial_capital,
             trades=portfolio.trades,

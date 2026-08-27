@@ -99,6 +99,28 @@ class InvalidOrderError(TradingError):
     code = "invalid_order"
 
 
+class InvalidQuantityError(InvalidOrderError):
+    """The quantity does not fit the instrument's tradable increment.
+
+    A stock trades in whole shares, so ``0.5`` is refused. Crypto trades
+    fractionally down to the instrument's ``quantity_step``, so a size finer
+    than that is refused too. The rule comes from the instrument, never from a
+    hard-coded assumption that quantities are integers.
+    """
+
+    code = "invalid_quantity"
+
+
+class MarketClosedError(TradingError):
+    """The instrument's market is not open for trading right now.
+
+    Only raised when ``ENFORCE_MARKET_HOURS`` is on. Crypto never raises it:
+    its calendar is open every hour of every day.
+    """
+
+    code = "market_closed"
+
+
 class InsufficientFundsError(TradingError):
     """The wallet cannot cover the cash the order requires."""
 

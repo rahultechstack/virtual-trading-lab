@@ -3,7 +3,13 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 # Async fixtures must share the event loop of the test that uses them.
 asyncio_default_fixture_loop_scope = "function"
-addopts = "-q --strict-markers"
+# -m "not network" by default: the suite must pass with no internet, and an
+# upstream outage must not read as a broken build. Run the live-feed checks
+# deliberately with `pytest -m network`.
+addopts = "-q --strict-markers -m 'not network'"
+markers = [
+    "network: hits a real market-data provider over the internet. Deselected by default.",
+]
 # /app is root-owned in the container; keep the cache somewhere writable.
 cache_dir = "/tmp/.pytest_cache"
 filterwarnings = ["error::DeprecationWarning:app.*"]

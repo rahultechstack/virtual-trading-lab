@@ -6,6 +6,9 @@
  * JavaScript number for arithmetic, only for display.
  */
 
+import type { AssetClass } from './instruments';
+import type { TradingStatus } from './markets';
+
 /** Where the quoted depth came from. */
 export type BidAskSource = 'provider' | 'modelled' | 'unavailable';
 
@@ -47,6 +50,9 @@ export interface StreamStatus {
   is_mock: boolean;
   is_delayed: boolean;
   symbol: string;
+  subscribed_symbols?: string[];
+  /** What the backend is actually fetching, including armed-trigger symbols. */
+  polled_symbols?: string[];
   exchange: string;
   poll_interval_seconds: number;
   connections: number;
@@ -65,7 +71,7 @@ export interface AutomaticOrderEvent {
   trigger_condition?: string;
   trigger_price?: string;
   action?: string;
-  quantity?: number;
+  quantity?: string;
   status?: string;
   symbol?: string;
   reason?: string | null;
@@ -75,15 +81,30 @@ export interface AutomaticOrderEvent {
   execution_price?: string;
   net_pnl?: string;
   total_charges?: string;
-  position_after?: number;
+  position_after?: string;
 }
 
-/** Confirms which instruments this socket is receiving. */
+/**
+ * Confirms which instruments this socket is receiving.
+ *
+ * Carries the instrument's asset class and market status so the UI can adapt
+ * (fractional quantity input, "closed" badge) without a second request — and
+ * without deciding any of it itself.
+ */
 export interface StreamSubscription {
   symbols: string[];
   symbol?: string;
   exchange?: string;
   company_name?: string;
+  asset_class?: AssetClass;
+  market?: string;
+  trading_hours?: string;
+  /** Decimal string: smallest tradable increment. */
+  quantity_step?: string;
+  market_status?: TradingStatus;
+  market_open?: boolean;
+  next_open?: string | null;
+  next_close?: string | null;
   server_time: string;
 }
 

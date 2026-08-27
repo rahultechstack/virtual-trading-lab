@@ -43,9 +43,46 @@ export function formatRupees(
   return body.startsWith('-') ? `-\u20b9${body.slice(1)}` : `\u20b9${body}`;
 }
 
-export function formatQuantity(value: number | null | undefined): string {
-  if (value === null || value === undefined) return EM_DASH;
-  return value.toLocaleString('en-IN');
+/**
+ * Read a quantity for a comparison or a display.
+ *
+ * Quantities arrive as Decimal strings because crypto sizes are fractional to
+ * eight places. Parsing to a number here is safe for what the UI does with it
+ * -- testing a sign, comparing against a held size, rendering -- but the
+ * string is what gets sent back to the backend, so the ledger never sees a
+ * binary float.
+ */
+export function toQuantity(value: string | number | null | undefined): number {
+  return toNumber(value) ?? 0;
+}
+
+/**
+ * Format a quantity, keeping only the decimals it actually has.
+ *
+ * 100 renders as "100", not "100.00000000"; 0.001 BTC renders as "0.001". A
+ * whole crypto size therefore reads as cleanly as a share count does.
+ */
+export function formatQuantity(
+  value: string | number | null | undefined,
+  options: { precision?: number } = {},
+): string {
+  const numeric = toNumber(value);
+  if (numeric === null) return EM_DASH;
+
+  // Trailing zeros carry no information here and make a size hard to read.
+  const decimals = decimalsIn(value, options.precision ?? 8);
+  return numeric.toLocaleString('en-IN', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: decimals,
+  });
+}
+
+/** How many decimal places a value actually uses, capped at `max`. */
+function decimalsIn(value: string | number | null | undefined, max: number): number {
+  const text = typeof value === 'string' ? value : String(value ?? '');
+  const fraction = text.split('.')[1] ?? '';
+  const significant = fraction.replace(/0+$/, '').length;
+  return Math.min(significant, max);
 }
 
 export function formatPercent(value: string | number | null | undefined): string {

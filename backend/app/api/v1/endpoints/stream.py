@@ -28,6 +28,7 @@ from app.core.exceptions import UnsupportedSymbolError
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.market_data.instruments import resolve_instrument
+from app.markets.registry import calendar_for
 from app.realtime.connection_manager import ConnectionLimitReached
 from app.realtime.price_stream import get_connection_manager, get_price_stream
 
@@ -57,6 +58,11 @@ async def _switch_symbol(manager, service, websocket, symbol) -> None:
         return
 
     await manager.set_subscription(websocket, instrument.symbol)
+
+    # The frame carries the instrument's asset class and market status, so the
+    # client can adapt (fractional quantity input, "closed" badge) without a
+    # second request and without deciding any of it itself.
+    session = calendar_for(instrument).trading_status()
     await manager.send_to(
         websocket,
         {
@@ -66,6 +72,22 @@ async def _switch_symbol(manager, service, websocket, symbol) -> None:
                 "symbol": instrument.symbol,
                 "exchange": instrument.exchange,
                 "company_name": instrument.company_name,
+                "asset_class": instrument.asset_class.value,
+                "market": instrument.market,
+                "trading_hours": instrument.trading_hours,
+                "quantity_step": str(instrument.quantity_step),
+                "market_status": session.status.value,
+                "market_open": session.is_open,
+                "next_open": (
+                    session.next_open.isoformat()
+                    if session.next_open is not None
+                    else None
+                ),
+                "next_close": (
+                    session.next_close.isoformat()
+                    if session.next_close is not None
+                    else None
+                ),
                 "server_time": datetime.now(tz=UTC).isoformat(),
             },
         },

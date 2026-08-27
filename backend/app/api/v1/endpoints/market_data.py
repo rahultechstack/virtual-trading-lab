@@ -25,12 +25,21 @@ router = APIRouter(prefix="/market-data", tags=["market-data"])
 def get_market_data_service(
     provider: Annotated[MarketDataProvider, Depends(get_provider)],
 ) -> RelianceMarketDataService:
-    """Build the service around the configured provider.
+    """Build the service for this request.
 
-    Declared as a dependency so tests can override the provider with a fake and
-    never touch the network.
+    Normally the service is built with **no** provider, so each instrument is
+    served by the feed routed for its asset class -- otherwise asking for BTC
+    would reach the equity feed, which resolves the bare ticker "BTC" to an
+    unrelated US-listed security and returns a price in dollars.
+
+    ``get_provider`` is still declared as a dependency because overriding it is
+    how tests substitute a fake feed. When it has been overridden, that
+    provider is honoured for every asset class; when it has not, routing wins.
     """
-    return RelianceMarketDataService(provider)
+    from app.market_data.registry import is_default_provider
+
+    routed = None if is_default_provider(provider) else provider
+    return RelianceMarketDataService(routed)
 
 
 ServiceDep = Annotated[RelianceMarketDataService, Depends(get_market_data_service)]
@@ -41,13 +50,25 @@ ServiceDep = Annotated[RelianceMarketDataService, Depends(get_market_data_servic
     response_model=ProviderCapabilities,
     summary="What the configured market-data feed supports",
 )
-async def get_provider_capabilities(service: ServiceDep) -> ProviderCapabilities:
+async def get_provider_capabilities(
+    service: ServiceDep,
+    symbol: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Report the feed serving this instrument. Capabilities differ "
+                "per asset class. Defaults to the default instrument."
+            )
+        ),
+    ] = None,
+) -> ProviderCapabilities:
     """Report the feed's real capabilities and limitations.
 
     Check this before relying on ``bid``/``ask`` or on live streaming -- not
-    every provider supplies them.
+    every provider supplies them, and the crypto feed and the equity feed do
+    not necessarily agree.
     """
-    return service.capabilities
+    return service.capabilities_for(symbol)
 
 
 @router.get(

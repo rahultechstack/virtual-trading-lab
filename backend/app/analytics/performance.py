@@ -32,7 +32,7 @@ class TradeExtreme:
 
     trade_id: int
     side: str
-    quantity: int
+    quantity: Decimal
     execution_price: Decimal
     gross_pnl: Decimal
     total_charges: Decimal

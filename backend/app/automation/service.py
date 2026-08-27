@@ -22,10 +22,15 @@ from app.core.config import settings
 from app.core.exceptions import (
     AutomaticOrderNotFoundError,
     InvalidAutomaticOrderError,
+    InvalidQuantityError,
     UnsupportedSymbolError,
 )
 from app.core.logging import get_logger
-from app.market_data.instruments import resolve_instrument, resolve_symbol
+from app.market_data.instruments import (
+    normalise_quantity,
+    resolve_instrument,
+    resolve_symbol,
+)
 from app.models.automatic_order import (
     AutomaticOrder,
     AutomaticOrderStatus,
@@ -69,7 +74,7 @@ class AutomaticOrderService:
         trigger_price: Decimal,
         trigger_condition: TriggerCondition,
         action: OrderSide,
-        quantity: int,
+        quantity,
         symbol: str | None = None,
         reference_price: Decimal | None = None,
         commit: bool = True,
@@ -82,10 +87,26 @@ class AutomaticOrderService:
                 Omitted, the directional rules are still enforced.
 
         Raises:
-            UnsupportedSymbolError: symbol other than the configured instrument.
+            UnsupportedSymbolError: symbol outside the supported universe.
+            InvalidQuantityError: size off the instrument's tradable increment.
             InvalidAutomaticOrderError: any validation rule below.
+
+        A crypto trigger is created exactly as an equity one is; the only
+        difference is that the instrument permits a fractional quantity. The
+        trigger is never gated on market hours -- a stop-loss set on a Friday
+        afternoon must still be armed over the weekend, and for crypto it can
+        genuinely fire then.
         """
-        resolved = self._resolve_symbol(symbol)
+        instrument = resolve_instrument(symbol)
+        resolved = instrument.symbol
+        # Same rule the trading engine applies, so a trigger can never be armed
+        # for a size the engine would later refuse to execute. Re-raised as an
+        # automatic-order error so this endpoint keeps reporting one error
+        # family, exactly as it did before crypto sizes existed.
+        try:
+            quantity = normalise_quantity(instrument, quantity)
+        except InvalidQuantityError as exc:
+            raise InvalidAutomaticOrderError(exc.message) from exc
         self._validate_basics(quantity=quantity, trigger_price=trigger_price)
 
         if order_type is AutomaticOrderType.STOP_LOSS:
@@ -100,7 +121,8 @@ class AutomaticOrderService:
 
         order = AutomaticOrder(
             symbol=resolved,
-            exchange=resolve_instrument(resolved).exchange,
+            exchange=instrument.exchange,
+            asset_class=instrument.asset_class,
             order_type=order_type,
             trigger_price=trigger_price,
             trigger_condition=trigger_condition,
@@ -137,11 +159,12 @@ class AutomaticOrderService:
         return resolve_symbol(symbol)
 
     @staticmethod
-    def _validate_basics(*, quantity: int, trigger_price: Decimal) -> None:
-        if quantity <= 0:
-            raise InvalidAutomaticOrderError(
-                f"Quantity must be positive, got {quantity}."
-            )
+    def _validate_basics(*, quantity: Decimal, trigger_price: Decimal) -> None:
+        """Bounds that hold for every asset class.
+
+        Positivity and step size are settled by ``normalise_quantity``, which
+        knows the instrument; only the absolute bound and the price remain.
+        """
         if quantity > MAX_ORDER_QUANTITY:
             raise InvalidAutomaticOrderError(
                 f"Quantity {quantity} exceeds the maximum of {MAX_ORDER_QUANTITY}."
@@ -158,7 +181,7 @@ class AutomaticOrderService:
         trigger_price: Decimal,
         trigger_condition: TriggerCondition,
         action: OrderSide,
-        quantity: int,
+        quantity: Decimal,
         reference_price: Decimal | None,
     ) -> None:
         """Enforce that a stop-loss actually protects the open position.
@@ -327,7 +350,7 @@ class AutomaticOrderService:
     # -- reconciliation --------------------------------------------------
 
     async def reconcile_for_position(
-        self, *, symbol: str, position_quantity: int
+        self, *, symbol: str, position_quantity: Decimal
     ) -> list[AutomaticOrder]:
         """Realign stop-losses after a fill moved the position.
 

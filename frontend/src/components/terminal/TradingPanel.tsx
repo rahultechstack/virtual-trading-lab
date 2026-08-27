@@ -1,10 +1,21 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { placeOrder } from '@/api/trading';
+import type { Instrument } from '@/types/instruments';
 import type { OrderResult, OrderSide, Position } from '@/types/trading';
-import { formatRupees } from '@/utils/format';
+import { formatQuantity, formatRupees, toQuantity } from '@/utils/format';
 
-const QUICK_QUANTITIES = [1, 10, 50, 100];
+/** Quick sizes for a whole-unit instrument, e.g. an NSE equity. */
+const WHOLE_QUANTITIES = ['1', '10', '50', '100'];
+
+/**
+ * Quick sizes for a fractional instrument.
+ *
+ * Deliberately expressed as *fractions of one unit* rather than a rupee value:
+ * one BTC and one DOGE differ by seven orders of magnitude, so any fixed rupee
+ * ladder would be useless for one of them.
+ */
+const FRACTIONAL_QUANTITIES = ['0.001', '0.01', '0.1', '1'];
 
 const SIDES: ReadonlyArray<{
   side: OrderSide;
@@ -19,8 +30,8 @@ const SIDES: ReadonlyArray<{
 ];
 
 interface Props {
-  /** Instrument being traded. Sent with every order. */
-  symbol: string | null;
+  /** Instrument being traded. Decides symbol, step size and quick sizes. */
+  instrument: Instrument | null;
   referencePrice: string | null;
   position: Position | null;
   disabled?: boolean;
@@ -33,22 +44,53 @@ interface Props {
  * The live price is sent as the **reference** price; the backend derives the
  * actual fill from it via the spread and slippage models, so the price shown
  * here is deliberately not promised as the execution price.
+ *
+ * Quantity is held as a **string** and sent as one. Nothing here assumes a
+ * whole number: what counts as a legal size comes from the instrument's
+ * `quantity_step`, and the backend validates it again regardless.
  */
 export function TradingPanel({
-  symbol,
+  instrument,
   referencePrice,
   position,
   disabled = false,
   onFilled,
 }: Props) {
-  const [quantity, setQuantity] = useState(10);
+  const symbol = instrument?.symbol ?? null;
+  const isFractional = instrument?.is_fractional ?? false;
+
+  const [quantity, setQuantity] = useState('10');
   const [pending, setPending] = useState<OrderSide | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastFill, setLastFill] = useState<OrderResult | null>(null);
 
+  const quickSizes = isFractional ? FRACTIONAL_QUANTITIES : WHOLE_QUANTITIES;
+
+  // Switching between a share and a coin makes the old size meaningless --
+  // 10 BTC is not a practice trade. Reset to a sensible default for the class.
+  useEffect(() => {
+    setQuantity(isFractional ? '0.01' : '10');
+    setLastFill(null);
+    setError(null);
+  }, [isFractional, symbol]);
+
+  const invalidQuantity = useMemo(() => {
+    const numeric = Number(quantity);
+    if (!Number.isFinite(numeric) || numeric <= 0) return true;
+    // A whole-unit instrument rejects fractions; the backend enforces the same
+    // rule, this only spares the round trip.
+    return !isFractional && !Number.isInteger(numeric);
+  }, [quantity, isFractional]);
+
   const noPrice = referencePrice === null;
-  const invalidQuantity = !Number.isInteger(quantity) || quantity <= 0;
   const blocked = disabled || noPrice || invalidQuantity || pending !== null;
+
+  const notional = useMemo(() => {
+    const price = Number(referencePrice);
+    const size = Number(quantity);
+    if (!Number.isFinite(price) || !Number.isFinite(size) || size <= 0) return null;
+    return price * size;
+  }, [referencePrice, quantity]);
 
   async function submit(side: OrderSide) {
     if (blocked || referencePrice === null) return;
@@ -59,6 +101,7 @@ export function TradingPanel({
     try {
       const result = await placeOrder({
         side,
+        // Sent as a string so the exact size reaches the ledger.
         quantity,
         reference_price: referencePrice,
         ...(symbol ? { symbol } : {}),
@@ -77,24 +120,33 @@ export function TradingPanel({
     <section className="panel">
       <header className="panel__header">
         <h2 className="panel__title">Order</h2>
-        <span className="muted panel__subtitle">{symbol ?? 'Market'}</span>
+        <span className="muted panel__subtitle">
+          {symbol ?? 'Market'}
+          {instrument ? ` · ${instrument.exchange}` : ''}
+        </span>
       </header>
 
       <label className="field">
-        <span className="field__label">Quantity</span>
+        <span className="field__label">
+          Quantity
+          {isFractional && <span className="muted"> · fractional</span>}
+        </span>
         <input
           className="field__input"
           type="number"
-          min={1}
-          step={1}
+          min={0}
+          // The instrument's own increment, so the spinner steps by something
+          // meaningful for a coin as well as for a share.
+          step={instrument?.quantity_step ?? 1}
+          inputMode="decimal"
           value={quantity}
-          onChange={(event) => setQuantity(Number(event.target.value))}
+          onChange={(event) => setQuantity(event.target.value)}
           disabled={disabled}
         />
       </label>
 
       <div className="quick-quantities">
-        {QUICK_QUANTITIES.map((value) => (
+        {quickSizes.map((value) => (
           <button
             key={value}
             type="button"
@@ -110,8 +162,10 @@ export function TradingPanel({
       <dl className="kv kv--tight">
         <dt>Reference</dt>
         <dd>{formatRupees(referencePrice)}</dd>
+        <dt>Order value</dt>
+        <dd>{notional === null ? '—' : formatRupees(notional)}</dd>
         <dt>Position</dt>
-        <dd>{position ? position.quantity : 0}</dd>
+        <dd>{formatQuantity(position?.quantity ?? 0)}</dd>
       </dl>
 
       <div className="order-buttons">
@@ -130,7 +184,11 @@ export function TradingPanel({
       </div>
 
       {invalidQuantity && (
-        <p className="form-note negative">Quantity must be a positive whole number.</p>
+        <p className="form-note negative">
+          {isFractional
+            ? 'Quantity must be a positive number.'
+            : `${symbol ?? 'This instrument'} trades in whole units, so the quantity must be a positive whole number.`}
+        </p>
       )}
       {noPrice && !invalidQuantity && (
         <p className="form-note muted">Waiting for a live price before trading.</p>
@@ -148,12 +206,19 @@ export function TradingPanel({
           <div className="fill-receipt__head">
             <strong>Filled</strong>
             <span className="muted">
-              {lastFill.trade.quantity} @ {formatRupees(lastFill.trade.execution_price)}
+              {formatQuantity(lastFill.trade.quantity)} @{' '}
+              {formatRupees(lastFill.trade.execution_price)}
             </span>
           </div>
           <dl className="kv kv--tight">
             <dt>Charges</dt>
             <dd>{formatRupees(lastFill.total_charges)}</dd>
+            {toQuantity(lastFill.trade.tds) > 0 && (
+              <>
+                <dt>of which TDS</dt>
+                <dd>{formatRupees(lastFill.trade.tds)}</dd>
+              </>
+            )}
             <dt>Net P&amp;L</dt>
             <dd className={Number(lastFill.net_pnl) >= 0 ? 'positive' : 'negative'}>
               {formatRupees(lastFill.net_pnl, { sign: true })}

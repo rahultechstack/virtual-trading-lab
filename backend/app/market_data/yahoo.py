@@ -1,9 +1,21 @@
-"""Yahoo Finance provider.
+"""Yahoo Finance chart API.
 
 Uses the public ``/v8/finance/chart`` endpoint, which serves both the latest
 quote (in ``meta``) and OHLCV history (in ``indicators``) without credentials.
 
-Measured limitations -- see ``capabilities`` for the machine-readable form:
+Two providers are built on it, because a feed that serves NSE equities is not
+automatically a feed that serves crypto -- the symbol format, the trading
+schedule and the limitations all differ:
+
+    YahooChartProvider          shared HTTP + parsing (this module)
+        |-- YahooFinanceProvider    NSE/BSE equities, "<SYMBOL>.NS"
+        +-- YahooCryptoProvider     crypto pairs, "<SYMBOL>-INR"  (crypto.py)
+
+Only the vendor symbol mapping and the declared capabilities differ, so the
+parsing lives here once rather than being duplicated per asset class.
+
+Measured limitations of the equity provider -- see ``capabilities`` for the
+machine-readable form:
 
 * **No bid/ask.** Depth lives on ``/v7/finance/quote``, which now returns
   HTTP 401 without a session crumb. ``Quote.bid`` and ``Quote.ask`` are
@@ -79,47 +91,30 @@ def _to_money(value: float | int | None) -> Decimal | None:
     return Decimal(str(value)).quantize(_CENT)
 
 
-class YahooFinanceProvider(MarketDataProvider):
-    """Keyless market data for NSE and BSE equities."""
+class YahooChartProvider(MarketDataProvider):
+    """Shared plumbing for every provider backed by Yahoo's chart endpoint.
 
-    name = "yahoo"
+    Subclasses supply ``name``, ``capabilities`` and ``_vendor_symbol``. They
+    inherit the HTTP client, error translation, quote assembly and candle
+    parsing, so an asset class is added by describing how its symbols are
+    spelled -- not by reimplementing the feed.
+    """
+
+    name = "yahoo-chart"
+    #: Fallback currency when the payload omits one.
+    default_currency = "INR"
 
     def __init__(self, timeout_seconds: float = 15.0) -> None:
         self._client = httpx.AsyncClient(
             base_url=_BASE_URL, headers=_HEADERS, timeout=timeout_seconds
         )
 
-    # -- capabilities ----------------------------------------------------
-
-    @property
-    def capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities(
-            name=self.name,
-            supports_quotes=True,
-            supports_historical=True,
-            supports_bid_ask=False,
-            supports_live_stream=False,
-            is_delayed=False,
-            quote_delay_minutes=0,
-            requires_credentials=False,
-            supported_intervals=list(_INTERVAL.keys()),
-            limitations=[
-                "No bid/ask: the endpoint carrying order-book depth requires an "
-                "authenticated session, so bid and ask are always null.",
-                "No streaming: there is no public WebSocket feed, so "
-                "subscribe_live_data() raises LiveDataNotSupportedError.",
-                "Unofficial API: undocumented and unsupported by Yahoo; it may "
-                "rate-limit or change shape without notice.",
-                "1-minute history is retained for roughly 30 days only.",
-                "Not licensed for commercial redistribution.",
-            ],
-        )
-
-    # -- helpers ---------------------------------------------------------
+    # -- vendor mapping (subclass responsibility) -------------------------
 
     def _vendor_symbol(self, symbol: str, exchange: str) -> str:
-        suffix = _EXCHANGE_SUFFIX.get(exchange.upper(), "")
-        return f"{symbol.upper()}{suffix}"
+        raise NotImplementedError
+
+    # -- transport --------------------------------------------------------
 
     async def _fetch_chart(self, vendor_symbol: str, params: dict) -> dict:
         """GET the chart endpoint and unwrap the single result object."""
@@ -168,6 +163,15 @@ class YahooFinanceProvider(MarketDataProvider):
             raise MarketDataUnavailableError(
                 f"Yahoo Finance returned no price for {vendor_symbol}."
             )
+        if last_price <= 0:
+            # An asset priced below one paisa rounds to zero here. The ledger
+            # is denominated in paise, so it genuinely cannot be traded rather
+            # than merely being awkward -- say so instead of returning 0.00.
+            raise MarketDataUnavailableError(
+                f"{vendor_symbol} is priced below the smallest representable "
+                f"amount (0.01 {meta.get('currency') or self.default_currency}); "
+                "this platform cannot price it."
+            )
 
         market_time = meta.get("regularMarketTime")
         timestamp = (
@@ -198,7 +202,7 @@ class YahooFinanceProvider(MarketDataProvider):
             day_open=self._session_open(result),
             day_high=_to_money(meta.get("regularMarketDayHigh")),
             day_low=_to_money(meta.get("regularMarketDayLow")),
-            currency=meta.get("currency") or "INR",
+            currency=meta.get("currency") or self.default_currency,
             provider=self.name,
             is_delayed=False,
         )
@@ -252,7 +256,8 @@ class YahooFinanceProvider(MarketDataProvider):
 
         Gaps (halts, holidays) come back as nulls in the OHLC arrays. Those
         rows are dropped rather than forward-filled, so a caller never sees a
-        bar the exchange did not print.
+        bar the exchange did not print. A continuous market simply has no such
+        gaps, which is why the same parser serves both asset classes.
         """
         timestamps = result.get("timestamp") or []
         quote_blocks = (result.get("indicators") or {}).get("quote") or [{}]
@@ -296,3 +301,38 @@ class YahooFinanceProvider(MarketDataProvider):
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+class YahooFinanceProvider(YahooChartProvider):
+    """Keyless market data for NSE and BSE equities."""
+
+    name = "yahoo"
+    default_currency = "INR"
+
+    def _vendor_symbol(self, symbol: str, exchange: str) -> str:
+        suffix = _EXCHANGE_SUFFIX.get(exchange.upper(), "")
+        return f"{symbol.upper()}{suffix}"
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            name=self.name,
+            supports_quotes=True,
+            supports_historical=True,
+            supports_bid_ask=False,
+            supports_live_stream=False,
+            is_delayed=False,
+            quote_delay_minutes=0,
+            requires_credentials=False,
+            supported_intervals=list(_INTERVAL.keys()),
+            limitations=[
+                "No bid/ask: the endpoint carrying order-book depth requires an "
+                "authenticated session, so bid and ask are always null.",
+                "No streaming: there is no public WebSocket feed, so "
+                "subscribe_live_data() raises LiveDataNotSupportedError.",
+                "Unofficial API: undocumented and unsupported by Yahoo; it may "
+                "rate-limit or change shape without notice.",
+                "1-minute history is retained for roughly 30 days only.",
+                "Not licensed for commercial redistribution.",
+            ],
+        )
