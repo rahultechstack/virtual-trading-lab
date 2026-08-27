@@ -56,6 +56,28 @@ export interface StreamStatus {
   server_time?: string;
 }
 
+/** Emitted when the backend monitor fires (or fails to fire) a trigger. */
+export interface AutomaticOrderEvent {
+  event: 'triggered' | 'failed';
+  automatic_order_id: number;
+  server_time: string;
+  order_type?: string;
+  trigger_condition?: string;
+  trigger_price?: string;
+  action?: string;
+  quantity?: number;
+  status?: string;
+  symbol?: string;
+  reason?: string | null;
+  trigger_market_price?: string | null;
+  triggered_order_id?: number | null;
+  /** Present only on a successful trigger. */
+  execution_price?: string;
+  net_pnl?: string;
+  total_charges?: string;
+  position_after?: number;
+}
+
 export interface StreamError {
   message: string;
   detail?: string;
@@ -67,6 +89,7 @@ export type StreamMessage =
   | { type: 'tick'; data: PriceTick }
   | { type: 'status'; data: StreamStatus }
   | { type: 'error'; data: StreamError }
+  | { type: 'automatic_order'; data: AutomaticOrderEvent }
   | { type: 'pong'; data: { server_time: string } };
 
 export type ConnectionState =

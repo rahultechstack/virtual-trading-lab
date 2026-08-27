@@ -1,5 +1,6 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
+import { AutomaticOrderPanel } from './AutomaticOrderPanel';
 import { OrdersPanel } from './OrdersPanel';
 import { PositionPanel } from './PositionPanel';
 import { PriceChart } from './PriceChart';
@@ -23,7 +24,8 @@ type Tab = 'orders' | 'trades';
  *   fills so every panel updates from one consistent set of reads.
  */
 export function Terminal() {
-  const { tick, status, connection, attempt, isStale, reconnect } = useLivePrice();
+  const { tick, automaticOrderEvent, status, connection, attempt, isStale, reconnect } =
+    useLivePrice();
   const markPrice = tick?.last_price ?? null;
 
   const {
@@ -40,12 +42,25 @@ export function Terminal() {
   } = useAccount(markPrice);
 
   const [tab, setTab] = useState<Tab>('orders');
+  // Bumped whenever the automatic-order list needs reloading.
+  const [automationToken, setAutomationToken] = useState(0);
 
   // A fill changes the wallet, the position and both histories at once, so
   // everything is reloaded together rather than patched piecemeal.
   const handleFilled = useCallback(() => {
     void refresh();
+    // A manual fill can retire or clamp a stop-loss server-side, so the
+    // trigger list is reloaded alongside the account panels.
+    setAutomationToken((token) => token + 1);
   }, [refresh]);
+
+  // A trigger fired on the backend: position, wallet, P&L and both histories
+  // have all moved. Reload everything -- no page refresh needed.
+  useEffect(() => {
+    if (automaticOrderEvent === null) return;
+    void refresh();
+    setAutomationToken((token) => token + 1);
+  }, [automaticOrderEvent, refresh]);
 
   return (
     <div className="terminal">
@@ -135,6 +150,14 @@ export function Terminal() {
             position={position}
             disabled={needsWallet}
             onFilled={handleFilled}
+          />
+
+          <AutomaticOrderPanel
+            position={position}
+            referencePrice={markPrice}
+            disabled={needsWallet}
+            refreshToken={automationToken}
+            onChanged={() => setAutomationToken((token) => token + 1)}
           />
 
           <WalletPanel

@@ -66,6 +66,26 @@ class LiveDataNotSupportedError(MarketDataError):
     code = "live_data_not_supported"
 
 
+class AutomaticOrderError(DomainError):
+    """Base class for automatic-order failures."""
+
+    status_code = 400
+    code = "automatic_order_error"
+
+
+class InvalidAutomaticOrderError(AutomaticOrderError):
+    """The trigger is malformed, or contradicts the position it protects."""
+
+    code = "invalid_automatic_order"
+
+
+class AutomaticOrderNotFoundError(AutomaticOrderError):
+    """No automatic order with that id."""
+
+    status_code = 404
+    code = "automatic_order_not_found"
+
+
 class TradingError(DomainError):
     """Base class for order-rejection reasons."""
 

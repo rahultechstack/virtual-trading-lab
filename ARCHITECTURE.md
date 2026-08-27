@@ -3509,3 +3509,157 @@ mechanism.
 
 *End of document. Generated from a full read of the repository at commit
 `1f0a749`; no application code was modified.*
+
+---
+
+## 18. Automatic Orders (stop-loss & price triggers)
+
+Added after the original document. Integrates with the existing engine rather
+than replacing any part of it.
+
+### 18.1 Where it sits
+
+```
+ Market Data (yahoo/mock)
+        |
+ PriceStreamService._broadcast_quote()      app/realtime/price_stream.py
+        |  tick broadcast to clients first, THEN:
+        v
+ PriceStreamService._run_automation(last_price)
+        |
+        v
+ AutomaticOrderMonitor.on_price()           app/automation/monitor.py
+        |
+        +-- condition_is_met()              app/automation/evaluator.py   (pure)
+        |
+        +-- _claim_next()   SELECT ... FOR UPDATE SKIP LOCKED
+        |                   status ACTIVE -> TRIGGERED, COMMIT   <-- the claim
+        |
+        +-- _execute()
+              |
+              v
+        TradingEngine.place_order()         app/trading/engine.py  (UNCHANGED path)
+              |-- OrderManager / ExecutionEngine / PositionManager /
+              |   PortfolioManager / SnapshotService
+              +-- AutomaticOrderService.reconcile_for_position()  <-- NEW, same txn
+              |
+              v
+        orders / trades / positions / wallet / portfolio_snapshots
+              |
+              v
+ ConnectionManager.broadcast({"type":"automatic_order", ...})
+              |
+              v
+ useLivePrice -> Terminal -> useAccount.refresh() + trigger list reload
+```
+
+**There is exactly one execution path.** A fired trigger becomes an ordinary
+`Order` + `Trade` through `TradingEngine.place_order`. No parallel execution
+code exists.
+
+### 18.2 Files added
+
+| File | Responsibility |
+| ---- | -------------- |
+| `app/models/automatic_order.py` | `AutomaticOrder`, `AutomaticOrderType`, `TriggerCondition`, `AutomaticOrderStatus` |
+| `app/automation/evaluator.py` | **Pure** trigger arithmetic: `condition_is_met`, `closing_side_for`, `stop_loss_condition_for`, `protects_position` |
+| `app/automation/service.py` | `AutomaticOrderService` — create/validate/list/cancel/**reconcile** |
+| `app/automation/monitor.py` | `AutomaticOrderMonitor` — claim + execute; `get_automatic_order_monitor()` singleton |
+| `app/schemas/automatic_order.py` | `CreateAutomaticOrderRequest`, `AutomaticOrderResponse` |
+| `app/api/v1/endpoints/automatic_orders.py` | 5 routes |
+| `alembic/versions/20260827_0900_add_automatic_orders.py` | revision `7c4e1a9b2d55` |
+| `tests/test_automatic_orders.py` | 43 tests |
+
+### 18.3 Files modified (minimally)
+
+| File | Change |
+| ---- | ------ |
+| `app/trading/engine.py` | one call to `reconcile_for_position()` after `mark_filled`, **inside the existing transaction**. Local import, as `SnapshotService` already does. |
+| `app/realtime/price_stream.py` | `_broadcast_quote` calls new `_run_automation`; `status()` gains an `automation` block |
+| `app/core/exceptions.py` | `AutomaticOrderError`, `InvalidAutomaticOrderError`, `AutomaticOrderNotFoundError` |
+| `app/models/__init__.py`, `app/api/v1/router.py` | registration |
+| `tests/conftest.py` | `automatic_orders` added to the TRUNCATE list |
+
+No existing function's behaviour was changed. BUY/SELL/SHORT/COVER are untouched.
+
+### 18.4 Stop-loss semantics
+
+Direction is **derived from the position**, never trusted from the request:
+
+| Position | Condition | Action | Fires when |
+| -------- | --------- | ------ | ---------- |
+| LONG (`quantity > 0`) | `LTE` | `SELL` | price falls to/through the trigger |
+| SHORT (`quantity < 0`) | `GTE` | `BUY_TO_COVER` | price rises to/through the trigger |
+| FLAT | — | — | rejected: nothing to protect |
+
+Boundaries are **inclusive** (`>= 1450` fires at exactly 1450).
+
+Validation also rejects a stop that would fire on the next tick — but only when
+a live price is available. Entry price is deliberately *not* used as the
+reference: a stop above entry is a legitimate profit-protecting stop once price
+has moved in your favour.
+
+`PRICE_TRIGGER` has no position requirement and accepts any condition/action.
+If the engine later refuses it (no position, no cash) it becomes `FAILED`.
+
+### 18.5 Duplicate-execution protection
+
+Two-phase claim in `AutomaticOrderMonitor`:
+
+1. `SELECT ... FOR UPDATE SKIP LOCKED`, re-check `status == ACTIVE` under the
+   lock, stamp `TRIGGERED` + `triggered_at` + `trigger_market_price`, **commit**.
+2. Only then execute.
+
+The committed transition removes the row from the ACTIVE set before any trade
+happens, so a price that stays past the trigger for many ticks cannot re-fire
+it. An `asyncio.Lock` additionally skips a tick if the previous evaluation is
+still executing. Verified live: 13 evaluations, 1 execution.
+
+Execution failures go to `FAILED`, never back to `ACTIVE` — otherwise a doomed
+trigger would retry on every tick forever.
+
+### 18.6 Position interaction
+
+`AutomaticOrderService.reconcile_for_position()` runs **inside the order's own
+transaction**, so a stop can never briefly outlive the position it protects.
+
+| Position change | Stop-loss outcome |
+| --------------- | ----------------- |
+| Goes flat | `CANCELLED`, reason "Position closed…" |
+| Reverses direction | `CANCELLED`, reason "Position reversed…" |
+| **Reduced** (partial close) | **quantity clamped** to what remains |
+| Grown | left alone |
+
+**Partial-position decision.** Clamping was chosen over cancel-and-recreate
+because the user's intent ("get me out of this position") survives a partial
+exit; cancelling would silently leave the remainder unprotected. LONG 100 with
+a 100-share stop, sell 40 manually → the stop becomes 60. Growing the position
+does *not* raise the quantity, since that would protect shares the user never
+asked to protect.
+
+`PRICE_TRIGGER` orders are never reconciled — they are standalone conditions,
+not attached to a position.
+
+### 18.7 Statuses
+
+`ACTIVE` → `TRIGGERED` | `CANCELLED` | `FAILED`. All three are terminal.
+
+`EXPIRED` from the brief is **not implemented**: nothing in this platform
+carries session or good-till-date semantics, so no order could ever reach it.
+`FAILED` was added instead, because an execution the engine rejects must be
+terminal rather than retried.
+
+### 18.8 How to modify
+
+| Task | File |
+| ---- | ---- |
+| Change when a trigger fires | `app/automation/evaluator.py:condition_is_met` (pure, fully unit-tested) |
+| Change stop-loss validation rules | `app/automation/service.py:_validate_stop_loss` |
+| Change partial-position behaviour | `app/automation/service.py:reconcile_for_position` |
+| Change claim/duplicate protection | `app/automation/monitor.py:_claim_next` |
+| Change the WebSocket frame | `app/automation/monitor.py:_event` **and** `frontend/src/types/stream.ts` |
+| Add a condition (e.g. crossing) | `TriggerCondition` enum + a migration + `condition_is_met` |
+
+**Do not** add execution logic to `app/automation/`. Firing decides *whether*;
+`TradingEngine` decides *what happens*. Keeping that split is what guarantees
+automatic and manual orders are accounted identically.

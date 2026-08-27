@@ -119,7 +119,15 @@ class PriceStreamService:
             "ticks_broadcast": self.tick_count,
             "errors": self.error_count,
             "last_error": self.last_error,
+            "automation": self._automation_status(),
         }
+
+    @staticmethod
+    def _automation_status() -> dict[str, Any]:
+        """Automatic-order counters, for the status endpoint."""
+        from app.automation.monitor import get_automatic_order_monitor
+
+        return get_automatic_order_monitor().status()
 
     # -- lifecycle -------------------------------------------------------
 
@@ -224,6 +232,29 @@ class PriceStreamService:
         self.tick_count += 1
         self.last_error = None
         await self._manager.broadcast(payload)
+        await self._run_automation(quote.last_price)
+
+    async def _run_automation(self, market_price: Decimal) -> None:
+        """Let the automatic-order monitor act on this price.
+
+        Runs after the tick is broadcast so the chart is never held up by
+        order execution. Failures are contained inside the monitor; this
+        wrapper is a second guard so the stream survives regardless.
+        """
+        # Imported here to keep the realtime package free of a hard
+        # dependency on the trading stack at import time.
+        from app.automation.monitor import get_automatic_order_monitor
+
+        try:
+            events = await get_automatic_order_monitor().on_price(
+                market_price=market_price, symbol=self._symbol
+            )
+        except Exception as exc:  # noqa: BLE001 - the stream must survive
+            logger.warning("Automatic order monitor error: %s", exc)
+            return
+
+        for event in events:
+            await self._manager.broadcast(event)
 
     async def _handle_failure(self, exc: Exception) -> None:
         self.error_count += 1

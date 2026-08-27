@@ -85,7 +85,8 @@ async def clean_tables() -> None:
     async with SessionLocal() as session:
         await session.execute(
             text(
-                "TRUNCATE TABLE portfolio_snapshots, trades, orders, positions, wallet "
+                "TRUNCATE TABLE automatic_orders, portfolio_snapshots, trades, orders, "
+                "positions, wallet "
                 "RESTART IDENTITY CASCADE"
             )
         )

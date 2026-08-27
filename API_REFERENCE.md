@@ -2315,3 +2315,157 @@ Targeted suites by area:
 
 *Generated from a complete read of the repository at commit `1f0a749`.
 No application code was modified.*
+
+---
+
+## 13. Automatic Orders API (stop-loss & price triggers)
+
+Added after the original document. **Auth: none required**, like every other
+endpoint. Architecture, position interaction and duplicate protection are
+documented in `ARCHITECTURE.md` §18.
+
+### 13.1 Endpoints
+
+| # | Method | Path | Purpose |
+|---|--------|------|---------|
+| 26 | POST | `/api/v1/automatic-orders` | Create a stop-loss or price trigger |
+| 27 | GET | `/api/v1/automatic-orders/active` | Active triggers |
+| 28 | GET | `/api/v1/automatic-orders` | History (all statuses) |
+| 29 | GET | `/api/v1/automatic-orders/{id}` | One trigger |
+| 30 | POST | `/api/v1/automatic-orders/{id}/cancel` | Cancel an ACTIVE trigger |
+
+File: `app/api/v1/endpoints/automatic_orders.py`.
+
+### 13.2 `POST /api/v1/automatic-orders`
+
+Request schema `CreateAutomaticOrderRequest`:
+
+| Field | Type | Req | Validation |
+|-------|------|-----|-----------|
+| `order_type` | `AutomaticOrderType` | yes | `STOP_LOSS` \| `PRICE_TRIGGER` |
+| `trigger_price` | `Decimal` | yes | `gt=0`, 18/2 |
+| `trigger_condition` | `TriggerCondition` | yes | `GTE` (at/above) \| `LTE` (at/below) |
+| `action` | `OrderSide` | yes | `BUY` \| `SELL` \| `SHORT_SELL` \| `BUY_TO_COVER` |
+| `quantity` | `int` | yes | `gt=0`, `le=10_000_000` |
+| `symbol` | `str \| None` | no | must be the configured symbol |
+| `reference_price` | `Decimal \| None` | no | `gt=0`. Omitted → endpoint falls back to the live stream's last tick |
+
+**STOP_LOSS rules**, derived from the open position (never trusted from the request):
+
+| Position | Required `trigger_condition` | Required `action` |
+|---|---|---|
+| LONG | `LTE` | `SELL` |
+| SHORT | `GTE` | `BUY_TO_COVER` |
+| FLAT | — | rejected |
+
+Also: `quantity <= abs(position.quantity)`, and — when a reference price is
+available — a long's trigger must sit **below** it, a short's **above** it.
+
+Response `AutomaticOrderResponse`. **201** on success.
+
+| Status | Code | Cause |
+|---|---|---|
+| 400 | `invalid_automatic_order` | flat position, wrong direction/condition, quantity over the position, trigger that would fire immediately, bad quantity/price |
+| 400 | `unsupported_symbol` | symbol other than the configured one |
+| 422 | — | Pydantic (non-positive values, bad enum) |
+
+```bash
+curl -X POST http://localhost:8000/api/v1/automatic-orders \
+  -H 'Content-Type: application/json' \
+  -d '{"order_type":"STOP_LOSS","trigger_price":"1350.00",
+       "trigger_condition":"LTE","action":"SELL","quantity":100}'
+```
+```json
+{"id":1,"symbol":"RELIANCE","exchange":"NSE","order_type":"STOP_LOSS",
+ "trigger_price":"1350.00","trigger_condition":"LTE","action":"SELL","quantity":100,
+ "status":"ACTIVE","created_at":"2026-08-27T11:09:48.166341Z","triggered_at":null,
+ "cancelled_at":null,"trigger_market_price":null,"triggered_order_id":null,"reason":null}
+```
+
+### 13.3 Reads and cancel
+
+* **`GET /automatic-orders/active`** — query `limit` (`ge=1, le=500`, default 100).
+  Oldest first: the order the monitor evaluates them in. `200`.
+* **`GET /automatic-orders`** — query `limit`, `offset`, `status` (alias for
+  `order_status`). Newest first, all statuses. `200`.
+* **`GET /automatic-orders/{id}`** — `200`; `404 automatic_order_not_found`.
+* **`POST /automatic-orders/{id}/cancel`** — `200`;
+  `400 invalid_automatic_order` if already terminal; `404`. Takes
+  `SELECT ... FOR UPDATE` with `populate_existing` so it cannot overwrite a
+  claim the monitor just committed.
+
+**Services:** `AutomaticOrderService`. **Tables:** `automatic_orders`
+(+ `positions` read on stop-loss validation). Creating or cancelling never
+touches `orders`, `trades` or `wallet`.
+
+### 13.4 Model — table `automatic_orders`
+
+File `app/models/automatic_order.py`. Migration `7c4e1a9b2d55`.
+
+| Column | Type | Null | Notes |
+|---|---|---|---|
+| `id` | `BigInteger` | no | PK |
+| `symbol` | `String(32)` | no | indexed |
+| `exchange` | `String(16)` | no | default `'NSE'` |
+| `order_type` | `automatic_order_type` | no | `STOP_LOSS` \| `PRICE_TRIGGER` |
+| `trigger_price` | `Numeric(18,2)` | no | |
+| `trigger_condition` | `trigger_condition` | no | `GTE` \| `LTE` |
+| `action` | `order_side` | no | **reuses** the existing enum |
+| `quantity` | `Integer` | no | |
+| `status` | `automatic_order_status` | no | `ACTIVE`/`TRIGGERED`/`CANCELLED`/`FAILED`, indexed |
+| `triggered_at`, `cancelled_at` | `TIMESTAMPTZ` | yes | |
+| `trigger_market_price` | `Numeric(18,2)` | yes | price that satisfied the condition |
+| `triggered_order_id` | `BigInteger` | yes | **FK** → `orders.id` `ON DELETE SET NULL` |
+| `reason` | `String(500)` | yes | cancel reason / failure message |
+| `created_at`, `updated_at` | `TIMESTAMPTZ` | no | `TimestampMixin` |
+
+Constraints: `quantity > 0`, `quantity <= 10000000`, `trigger_price > 0`,
+`status <> 'TRIGGERED' OR triggered_at IS NOT NULL`,
+`status <> 'CANCELLED' OR cancelled_at IS NOT NULL`.
+Indexes: `symbol`, `status`, `triggered_order_id`, `(symbol, status)`, `created_at`.
+
+New enums: `automatic_order_type`, `trigger_condition`, `automatic_order_status`.
+`order_side` is reused and is **not** dropped on downgrade.
+
+### 13.5 WebSocket event
+
+Same socket, `ws://localhost:8000/api/v1/stream/prices`. New server→client frame:
+
+```json
+{"type":"automatic_order",
+ "data":{"event":"triggered","automatic_order_id":1,
+         "server_time":"2026-08-27T11:09:48.703530Z",
+         "order_type":"PRICE_TRIGGER","trigger_condition":"GTE",
+         "trigger_price":"1.00","action":"SELL","quantity":10,
+         "status":"TRIGGERED","symbol":"RELIANCE","reason":null,
+         "trigger_market_price":"1282.20","triggered_order_id":28,
+         "execution_price":"1281.81","net_pnl":"-15.80",
+         "total_charges":"8.00","position_after":0}}
+```
+
+`event` is `"triggered"` or `"failed"`. On `failed`, the execution fields are
+absent and `reason` carries the engine's rejection message.
+
+Built by `AutomaticOrderMonitor._event`; typed in
+`frontend/src/types/stream.ts` as `AutomaticOrderEvent`; handled in
+`useLivePrice` and consumed by `Terminal`, which refreshes every account panel
+and reloads the trigger list. No page refresh is needed.
+
+`GET /api/v1/stream/status` gains an `automation` block:
+
+```json
+"automation": {"evaluations": 13, "triggered": 1, "failed": 0}
+```
+
+### 13.6 Frontend
+
+| File | Role |
+|---|---|
+| `frontend/src/types/automaticOrders.ts` | contracts + label maps |
+| `frontend/src/api/automaticOrders.ts` | `createAutomaticOrder`, `fetchActiveAutomaticOrders`, `fetchAutomaticOrderHistory`, `cancelAutomaticOrder` |
+| `frontend/src/components/terminal/AutomaticOrderPanel.tsx` | create form + active list + cancel |
+| `frontend/src/components/terminal/Terminal.tsx` | renders the panel; refreshes on `automatic_order` events |
+
+For a stop-loss the panel **pre-fills and locks** condition + action from the
+open position. That is convenience only — the backend re-derives and
+re-validates, and the frontend never evaluates a price against a trigger.

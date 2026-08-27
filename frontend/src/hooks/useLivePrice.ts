@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { wsUrl } from '@/api/client';
 import type {
+  AutomaticOrderEvent,
   ConnectionState,
   PriceTick,
   StreamError,
@@ -21,6 +22,12 @@ const STALE_AFTER_MS = 30_000;
 
 interface UseLivePriceResult {
   tick: PriceTick | null;
+  /**
+   * Most recent automatic-order event pushed by the backend monitor.
+   * The backend decides whether a trigger fires; this is purely the
+   * notification that it did.
+   */
+  automaticOrderEvent: AutomaticOrderEvent | null;
   status: StreamStatus | null;
   error: StreamError | null;
   connection: ConnectionState;
@@ -42,6 +49,8 @@ interface UseLivePriceResult {
  */
 export function useLivePrice(): UseLivePriceResult {
   const [tick, setTick] = useState<PriceTick | null>(null);
+  const [automaticOrderEvent, setAutomaticOrderEvent] =
+    useState<AutomaticOrderEvent | null>(null);
   const [status, setStatus] = useState<StreamStatus | null>(null);
   const [error, setError] = useState<StreamError | null>(null);
   const [connection, setConnection] = useState<ConnectionState>('connecting');
@@ -124,6 +133,9 @@ export function useLivePrice(): UseLivePriceResult {
         case 'error':
           setError(message.data);
           break;
+        case 'automatic_order':
+          setAutomaticOrderEvent(message.data);
+          break;
         case 'pong':
           break;
       }
@@ -181,5 +193,14 @@ export function useLivePrice(): UseLivePriceResult {
     return () => window.clearInterval(timer);
   }, []);
 
-  return { tick, status, error, connection, attempt, isStale, reconnect };
+  return {
+    tick,
+    automaticOrderEvent,
+    status,
+    error,
+    connection,
+    attempt,
+    isStale,
+    reconnect,
+  };
 }

@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
+    automatic_orders,
     backtest,
     health,
     indicators,
@@ -22,3 +23,4 @@ api_router.include_router(trading.router)
 api_router.include_router(stream.router)
 api_router.include_router(portfolio.router)
 api_router.include_router(backtest.router)
+api_router.include_router(automatic_orders.router)

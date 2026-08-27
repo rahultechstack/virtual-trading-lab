@@ -157,6 +157,17 @@ class TradingEngine:
         )
         await self.orders.mark_filled(order, fill.price)
 
+        # Realign any stop-loss against the position this fill just moved,
+        # inside the SAME transaction: a stop can never briefly outlive the
+        # position it protects, and a partial exit clamps it rather than
+        # leaving it able to sell shares that are no longer held.
+        # Imported locally -- the automation package imports this engine back.
+        from app.automation.service import AutomaticOrderService
+
+        await AutomaticOrderService(self._session).reconcile_for_position(
+            symbol=resolved_symbol, position_quantity=outcome.new_quantity
+        )
+
         # Snapshot inside the same transaction, marked at the fill price: at
         # the instant of a trade that price *is* the market. Enrolling it here
         # means the equity curve can never record a state that never existed.
